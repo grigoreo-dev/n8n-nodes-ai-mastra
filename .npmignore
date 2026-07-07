@@ -1,0 +1,8 @@
+nodes/
+test/
+scripts/
+tsconfig.json
+vitest.config.ts
+install*.log
+*.tsbuildinfo
+.gitignore

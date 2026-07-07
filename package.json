@@ -1,0 +1,64 @@
+{
+  "name": "n8n-nodes-ai-mastra",
+  "version": "0.2.0",
+  "description": "Run AI agents on the Mastra framework inside n8n, with PostgreSQL-backed memory.",
+  "license": "MIT",
+  "keywords": [
+    "n8n-community-node-package",
+    "n8n",
+    "mastra",
+    "ai",
+    "agent",
+    "postgres",
+    "memory"
+  ],
+  "author": {
+    "name": ""
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/grigoreo/n8n-nodes-ai-mastra.git"
+  },
+  "engines": {
+    "node": ">=20.15"
+  },
+  "main": "index.js",
+  "scripts": {
+    "build": "tsup",
+    "dev": "tsup --watch",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "lint": "tsc --noEmit",
+    "prepublishOnly": "npm run build"
+  },
+  "files": [
+    "dist"
+  ],
+  "n8n": {
+    "n8nNodesApiVersion": 1,
+    "credentials": [],
+    "nodes": [
+      "dist/nodes/MemoryPostgresMastra/MemoryPostgresMastra.node.js",
+      "dist/nodes/MastraAgent/MastraAgent.node.js"
+    ]
+  },
+  "dependencies": {
+    "@mastra/core": "1.49.0",
+    "@mastra/memory": "1.22.1",
+    "@mastra/pg": "1.15.0"
+  },
+  "peerDependencies": {
+    "n8n-workflow": "*"
+  },
+  "devDependencies": {
+    "@types/node": "^20.15.0",
+    "@types/pg": "^8.11.0",
+    "n8n-workflow": "*",
+    "pg": "^8.13.0",
+    "tsup": "^8.5.1",
+    "typescript": "^5.9.3",
+    "vitest": "^2.1.0",
+    "vitest-mock-extended": "^2.0.2"
+  }
+}
