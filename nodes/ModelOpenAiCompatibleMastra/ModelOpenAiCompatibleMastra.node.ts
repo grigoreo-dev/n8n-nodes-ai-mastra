@@ -27,7 +27,7 @@ export class ModelOpenAiCompatibleMastra implements INodeType {
 	description: INodeTypeDescription = {
 		displayName: 'Mastra Model',
 		name: 'mastraModel',
-		icon: 'file:mastra.svg',
+		icon: 'file:model.svg',
 		group: ['transform'],
 		version: [1],
 		description: 'An OpenAI-compatible chat model (OpenRouter, OpenAI, Groq, …) for a Mastra Agent',

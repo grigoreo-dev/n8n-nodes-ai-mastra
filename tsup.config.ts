@@ -44,8 +44,8 @@ export default defineConfig({
 			['nodes/MastraAgent/mastra.svg', 'dist/nodes/MastraAgent/mastra.svg'],
 			['nodes/MemoryPostgresMastra/postgres.svg', 'dist/nodes/MemoryPostgresMastra/postgres.svg'],
 			[
-				'nodes/ModelOpenAiCompatibleMastra/mastra.svg',
-				'dist/nodes/ModelOpenAiCompatibleMastra/mastra.svg',
+				'nodes/ModelOpenAiCompatibleMastra/model.svg',
+				'dist/nodes/ModelOpenAiCompatibleMastra/model.svg',
 			],
 		];
 		for (const [src, dest] of icons) {
