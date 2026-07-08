@@ -25,7 +25,7 @@ export class MastraAgent implements INodeType {
 	description: INodeTypeDescription = {
 		displayName: 'Mastra Agent',
 		name: 'mastraAgent',
-		icon: 'file:mastra.svg',
+		icon: 'file:mastra-agent.svg',
 		group: ['transform'],
 		version: [1],
 		description: 'Run an AI agent on the Mastra framework',

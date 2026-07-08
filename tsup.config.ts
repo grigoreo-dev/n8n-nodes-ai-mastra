@@ -41,7 +41,7 @@ export default defineConfig({
 	keepNames: true,
 	onSuccess: async () => {
 		const icons: Array<[string, string]> = [
-			['nodes/MastraAgent/mastra.svg', 'dist/nodes/MastraAgent/mastra.svg'],
+			['nodes/MastraAgent/mastra-agent.svg', 'dist/nodes/MastraAgent/mastra-agent.svg'],
 			['nodes/MemoryPostgresMastra/postgres.svg', 'dist/nodes/MemoryPostgresMastra/postgres.svg'],
 			[
 				'nodes/ModelOpenAiCompatibleMastra/model.svg',
