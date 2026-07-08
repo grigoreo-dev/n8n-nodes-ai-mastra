@@ -10,6 +10,7 @@ import type { Agent as AgentType } from '@mastra/core/agent';
 
 import { isMastraMemoryHandoff } from '../shared/memoryHandoff';
 import { isMastraModelHandoff } from '../shared/modelHandoff';
+import { toMastraToolSet } from '../shared/toolBridge';
 
 /**
  * Mastra Agent root node.
@@ -197,19 +198,36 @@ export class MastraAgent implements INodeType {
 					memoryScope = { thread: connected.thread, resource: connected.resource };
 				}
 
+				const connectedTools = await this.getInputConnectionData(
+					NodeConnectionTypes.AiTool,
+					itemIndex,
+				);
+				const tools = toMastraToolSet(connectedTools);
+				if (Object.keys(tools).length > 0) {
+					(agentConfig as typeof agentConfig & { tools: typeof tools }).tools = tools;
+				}
+
+				const modelLabel =
+					typeof model === 'string'
+						? model
+						: (model as { modelId?: string; id?: string }).modelId ??
+							(model as { id?: string }).id ??
+							'connected-model';
+
+				const { index: aiLogIndex } = this.addInputData(NodeConnectionTypes.AiAgent, [
+					[{ json: { prompt, instructions, model: modelLabel } }],
+				]);
+
 				const agent = new Agent(agentConfig);
 
 				const stream = await agent.stream(prompt, memoryScope ? { memory: memoryScope } : {});
 				const text = await stream.text;
+				const tokenUsage =
+					'usage' in stream && stream.usage instanceof Promise ? await stream.usage : undefined;
 
-				// Never leak the apiKey from a connected model config into output —
-				// emit just the model id label.
-				const modelLabel =
-					typeof model === 'string'
-						? model
-						: (model as { id?: string; modelId?: string }).id ??
-							(model as { modelId?: string }).modelId ??
-							'connected-model';
+				this.addOutputData(NodeConnectionTypes.AiAgent, aiLogIndex, [
+					[{ json: { response: text, model: modelLabel, ...(tokenUsage ? { tokenUsage } : {}) } }],
+				]);
 
 				returnData.push({
 					json: {
