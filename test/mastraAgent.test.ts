@@ -33,15 +33,12 @@ function makeExecuteCtx(inputData: Record<string, unknown>) {
 				return 'You are helpful.';
 			case 'agentName':
 				return 'Test Agent';
-			case 'model':
-				return '';
 			default:
 				return fallback;
 		}
 	});
 	ctx.getInputConnectionData.mockImplementation(async (type: string) => inputData[type]);
 	ctx.continueOnFail.mockReturnValue(false);
-	ctx.addInputData.mockReturnValue({ index: 0 });
 	return ctx;
 }
 
@@ -60,6 +57,13 @@ describe('MastraAgent description', () => {
 });
 
 describe('MastraAgent.execute validation', () => {
+	it('requires a connected model (no inline fallback)', async () => {
+		const node = new MastraAgent();
+		const ctx = makeExecuteCtx({});
+
+		await expect(node.execute.call(ctx)).rejects.toThrow(/no model connected/i);
+	});
+
 	it('rejects non-Mastra model payloads', async () => {
 		const node = new MastraAgent();
 		const ctx = makeExecuteCtx({ [NodeConnectionTypes.AiLanguageModel]: { invoke: vi.fn() } });
@@ -87,6 +91,30 @@ describe('MastraAgent.execute validation', () => {
 });
 
 describe('MastraAgent.execute tools and logs', () => {
+	it('does not call addInputData/addOutputData on the execute context', async () => {
+		// Regression: these methods only exist on ISupplyDataFunctions (sub-nodes).
+		// Calling them on a root node's IExecuteFunctions throws
+		// "addInputData should not be called on IExecuteFunctions".
+		mastraAgentMock.createdConfigs.length = 0;
+		mastraAgentMock.streamResults = [{ text: Promise.resolve('ok') }];
+		const ctx = makeExecuteCtx({
+			[NodeConnectionTypes.AiLanguageModel]: {
+				__isMastraModel: true,
+				config: {
+					providerId: 'openai-compatible',
+					modelId: 'safe-model',
+					url: 'https://example.test',
+					apiKey: 'secret-key',
+				},
+			},
+		});
+
+		await new MastraAgent().execute.call(ctx);
+
+		expect(ctx.addInputData).not.toHaveBeenCalled();
+		expect(ctx.addOutputData).not.toHaveBeenCalled();
+	});
+
 	it('passes bridged tools into the Mastra Agent config', async () => {
 		mastraAgentMock.createdConfigs.length = 0;
 		mastraAgentMock.streamResults = [{ text: Promise.resolve('ok') }];
@@ -110,36 +138,5 @@ describe('MastraAgent.execute tools and logs', () => {
 		expect(mastraAgentMock.createdConfigs[0].tools).toMatchObject({
 			lookup: { description: 'Lookup' },
 		});
-	});
-
-	it('writes agent-level input and output logs without API keys', async () => {
-		mastraAgentMock.streamResults = [
-			{
-				text: Promise.resolve('Logged response'),
-				usage: Promise.resolve({ totalTokens: 3 }),
-			},
-		];
-		const ctx = makeExecuteCtx({
-			[NodeConnectionTypes.AiLanguageModel]: {
-				__isMastraModel: true,
-				config: {
-					providerId: 'openai-compatible',
-					modelId: 'safe-model',
-					url: 'https://example.test',
-					apiKey: 'secret-key',
-				},
-			},
-		});
-
-		await new MastraAgent().execute.call(ctx);
-
-		expect(ctx.addInputData).toHaveBeenCalledWith(NodeConnectionTypes.AiAgent, [
-			[{ json: { prompt: 'Hello', instructions: 'You are helpful.', model: 'safe-model' } }],
-		]);
-		expect(ctx.addOutputData).toHaveBeenCalled();
-		const outputPayload = JSON.stringify(ctx.addOutputData.mock.calls);
-		expect(outputPayload).toContain('safe-model');
-		expect(outputPayload).toContain('totalTokens');
-		expect(outputPayload).not.toContain('secret-key');
 	});
 });

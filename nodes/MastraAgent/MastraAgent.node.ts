@@ -64,16 +64,6 @@ export class MastraAgent implements INodeType {
 		credentials: [],
 		properties: [
 			{
-				displayName: 'Model (Fallback)',
-				name: 'model',
-				type: 'string',
-				default: '',
-				required: false,
-				placeholder: 'openai/gpt-4o-mini',
-				description:
-					"Leave empty when a Mastra Model sub-node is connected (recommended). Used ONLY as a fallback when nothing is connected: a Mastra model router ID in '<provider>/<model>' form, resolved against a provider API key in the environment (e.g. OPENAI_API_KEY).",
-			},
-			{
 				displayName: 'Prompt',
 				name: 'prompt',
 				type: 'string',
@@ -116,56 +106,38 @@ export class MastraAgent implements INodeType {
 
 		for (let itemIndex = 0; itemIndex < items.length; itemIndex++) {
 			try {
-				const modelParam = this.getNodeParameter('model', itemIndex) as string;
 				const prompt = this.getNodeParameter('prompt', itemIndex) as string;
 				const instructions = this.getNodeParameter('instructions', itemIndex, '') as string;
 				const agentName = this.getNodeParameter('agentName', itemIndex, 'n8n Mastra Agent') as string;
 
-				// Optional Model sub-node. When connected, it supplies a full Mastra
-				// OpenAICompatibleConfig ({ id, url, apiKey }) so the API key comes from
-				// an n8n credential instead of process.env. Otherwise fall back to the
-				// bare model-id string param (which Mastra resolves against the env).
+				// Model comes strictly from a connected Mastra Model sub-node, which
+				// supplies a full Mastra OpenAICompatibleConfig ({ id, url, apiKey }) so
+				// the API key comes from an n8n credential instead of process.env. There
+				// is no inline fallback: a model connection is required.
 				const connectedModel = await this.getInputConnectionData(
 					NodeConnectionTypes.AiLanguageModel,
 					itemIndex,
 				);
 
-				let model: ConstructorParameters<typeof AgentType>[0]['model'];
-				if (connectedModel !== undefined && connectedModel !== null) {
-					if (!isMastraModelHandoff(connectedModel)) {
-						throw new NodeOperationError(
-							this.getNode(),
-							'Connected model is not a Mastra model node',
-							{
-								description:
-									'The Mastra Agent only works with Mastra model sub-nodes (e.g. Mastra Model). Stock LangChain chat-model nodes are not compatible.',
-								itemIndex,
-							},
-						);
-					}
-					model = connectedModel.config;
-				} else {
-					const fallback = modelParam?.trim();
-					if (!fallback) {
-						throw new NodeOperationError(
-							this.getNode(),
-							'No model available',
-							{
-								description:
-									'Connect a Mastra Model sub-node to the Model input (recommended), or set the Model (Fallback) field to a Mastra model router ID like "openai/gpt-4o-mini".',
-								itemIndex,
-							},
-						);
-					}
-					if (!fallback.includes('/')) {
-						throw new NodeOperationError(
-							this.getNode(),
-							`Fallback model must be in '<provider>/<model>' form (got '${fallback}')`,
-							{ itemIndex },
-						);
-					}
-					model = fallback as `${string}/${string}`;
+				if (connectedModel === undefined || connectedModel === null) {
+					throw new NodeOperationError(this.getNode(), 'No model connected', {
+						description:
+							'Connect a Mastra Model sub-node to the Chat Model input. The Mastra Agent has no inline model fallback.',
+						itemIndex,
+					});
 				}
+				if (!isMastraModelHandoff(connectedModel)) {
+					throw new NodeOperationError(
+						this.getNode(),
+						'Connected model is not a Mastra model node',
+						{
+							description:
+								'The Mastra Agent only works with Mastra model sub-nodes (e.g. Mastra Model). Stock LangChain chat-model nodes are not compatible.',
+							itemIndex,
+						},
+					);
+				}
+				const model: ConstructorParameters<typeof AgentType>[0]['model'] = connectedModel.config;
 
 				// Optional memory sub-node. getInputConnectionData returns the memory
 				// node's `response` object verbatim (or undefined if nothing connected).
@@ -214,20 +186,10 @@ export class MastraAgent implements INodeType {
 							(model as { id?: string }).id ??
 							'connected-model';
 
-				const { index: aiLogIndex } = this.addInputData(NodeConnectionTypes.AiAgent, [
-					[{ json: { prompt, instructions, model: modelLabel } }],
-				]);
-
 				const agent = new Agent(agentConfig);
 
 				const stream = await agent.stream(prompt, memoryScope ? { memory: memoryScope } : {});
 				const text = await stream.text;
-				const tokenUsage =
-					'usage' in stream && stream.usage instanceof Promise ? await stream.usage : undefined;
-
-				this.addOutputData(NodeConnectionTypes.AiAgent, aiLogIndex, [
-					[{ json: { response: text, model: modelLabel, ...(tokenUsage ? { tokenUsage } : {}) } }],
-				]);
 
 				returnData.push({
 					json: {
