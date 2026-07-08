@@ -9,6 +9,7 @@ import {
 import type { Agent as AgentType } from '@mastra/core/agent';
 
 import { isMastraMemoryHandoff } from '../shared/memoryHandoff';
+import { isMastraModelHandoff } from '../shared/modelHandoff';
 
 /**
  * Mastra Agent root node.
@@ -39,6 +40,12 @@ export class MastraAgent implements INodeType {
 		inputs: [
 			{ type: NodeConnectionTypes.Main },
 			{
+				type: NodeConnectionTypes.AiLanguageModel,
+				displayName: 'Model',
+				required: false,
+				maxConnections: 1,
+			},
+			{
 				type: NodeConnectionTypes.AiMemory,
 				displayName: 'Memory',
 				required: false,
@@ -49,14 +56,14 @@ export class MastraAgent implements INodeType {
 		credentials: [],
 		properties: [
 			{
-				displayName: 'Model',
+				displayName: 'Model (Fallback)',
 				name: 'model',
 				type: 'string',
-				default: 'openai/gpt-4o-mini',
-				required: true,
+				default: '',
+				required: false,
 				placeholder: 'openai/gpt-4o-mini',
 				description:
-					"Mastra model router ID in '<provider>/<model>' form, e.g. 'openai/gpt-4o-mini' or 'anthropic/claude-3-5-sonnet-latest'. Requires the matching provider API key in the environment.",
+					"Leave empty when a Mastra Model sub-node is connected (recommended). Used ONLY as a fallback when nothing is connected: a Mastra model router ID in '<provider>/<model>' form, resolved against a provider API key in the environment (e.g. OPENAI_API_KEY).",
 			},
 			{
 				displayName: 'Prompt',
@@ -101,17 +108,55 @@ export class MastraAgent implements INodeType {
 
 		for (let itemIndex = 0; itemIndex < items.length; itemIndex++) {
 			try {
-				const model = this.getNodeParameter('model', itemIndex) as string;
+				const modelParam = this.getNodeParameter('model', itemIndex) as string;
 				const prompt = this.getNodeParameter('prompt', itemIndex) as string;
 				const instructions = this.getNodeParameter('instructions', itemIndex, '') as string;
 				const agentName = this.getNodeParameter('agentName', itemIndex, 'n8n Mastra Agent') as string;
 
-				if (!model.includes('/')) {
-					throw new NodeOperationError(
-						this.getNode(),
-						`Model must be in '<provider>/<model>' form (got '${model}')`,
-						{ itemIndex },
-					);
+				// Optional Model sub-node. When connected, it supplies a full Mastra
+				// OpenAICompatibleConfig ({ id, url, apiKey }) so the API key comes from
+				// an n8n credential instead of process.env. Otherwise fall back to the
+				// bare model-id string param (which Mastra resolves against the env).
+				const connectedModel = await this.getInputConnectionData(
+					NodeConnectionTypes.AiLanguageModel,
+					itemIndex,
+				);
+
+				let model: ConstructorParameters<typeof AgentType>[0]['model'];
+				if (connectedModel !== undefined && connectedModel !== null) {
+					if (!isMastraModelHandoff(connectedModel)) {
+						throw new NodeOperationError(
+							this.getNode(),
+							'Connected model is not a Mastra model node',
+							{
+								description:
+									'The Mastra Agent only works with Mastra model sub-nodes (e.g. Mastra Model). Stock LangChain chat-model nodes are not compatible.',
+								itemIndex,
+							},
+						);
+					}
+					model = connectedModel.config;
+				} else {
+					const fallback = modelParam?.trim();
+					if (!fallback) {
+						throw new NodeOperationError(
+							this.getNode(),
+							'No model available',
+							{
+								description:
+									'Connect a Mastra Model sub-node to the Model input (recommended), or set the Model (Fallback) field to a Mastra model router ID like "openai/gpt-4o-mini".',
+								itemIndex,
+							},
+						);
+					}
+					if (!fallback.includes('/')) {
+						throw new NodeOperationError(
+							this.getNode(),
+							`Fallback model must be in '<provider>/<model>' form (got '${fallback}')`,
+							{ itemIndex },
+						);
+					}
+					model = fallback as `${string}/${string}`;
 				}
 
 				// Optional memory sub-node. getInputConnectionData returns the memory
@@ -126,7 +171,7 @@ export class MastraAgent implements INodeType {
 					id: 'n8n-mastra-agent',
 					name: agentName,
 					instructions,
-					model: model as `${string}/${string}`,
+					model,
 				};
 
 				if (connected !== undefined && connected !== null) {
@@ -150,10 +195,19 @@ export class MastraAgent implements INodeType {
 				const stream = await agent.stream(prompt, memoryScope ? { memory: memoryScope } : {});
 				const text = await stream.text;
 
+				// Never leak the apiKey from a connected model config into output —
+				// emit just the model id label.
+				const modelLabel =
+					typeof model === 'string'
+						? model
+						: (model as { id?: string; modelId?: string }).id ??
+							(model as { modelId?: string }).modelId ??
+							'connected-model';
+
 				returnData.push({
 					json: {
 						output: text,
-						model,
+						model: modelLabel,
 						...(memoryScope
 							? { thread: memoryScope.thread, resource: memoryScope.resource }
 							: {}),

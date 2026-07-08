@@ -25,7 +25,9 @@
   "main": "index.js",
   "scripts": {
     "build": "tsup",
-    "dev": "tsup --watch",
+    "setup:custom": "node scripts/setup-custom.mjs",
+    "dev": "npm run setup:custom && concurrently -k -n build,n8n -c blue,green \"tsup --watch\" \"cross-env N8N_DEV_RELOAD=true N8N_SECURE_COOKIE=false n8n start\"",
+    "dev:watch": "tsup --watch",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",
@@ -37,10 +39,13 @@
   ],
   "n8n": {
     "n8nNodesApiVersion": 1,
-    "credentials": [],
+    "credentials": [
+      "dist/credentials/MastraOpenAiCompatibleApi.credentials.js"
+    ],
     "nodes": [
       "dist/nodes/MemoryPostgresMastra/MemoryPostgresMastra.node.js",
-      "dist/nodes/MastraAgent/MastraAgent.node.js"
+      "dist/nodes/MastraAgent/MastraAgent.node.js",
+      "dist/nodes/ModelOpenAiCompatibleMastra/ModelOpenAiCompatibleMastra.node.js"
     ]
   },
   "dependencies": {
@@ -56,6 +61,8 @@
     "@types/pg": "^8.11.0",
     "n8n-workflow": "*",
     "pg": "^8.13.0",
+    "concurrently": "^9.1.2",
+    "cross-env": "^7.0.3",
     "tsup": "^8.5.1",
     "typescript": "^5.9.3",
     "vitest": "^2.1.0",

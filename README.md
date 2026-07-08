@@ -73,9 +73,14 @@ Mastra scopes memory by **thread** (n8n session id) and **resource** (user id):
 
 ## Development
 
+Requires `n8n` on your PATH (`npm i -g n8n` or your usual install).
+
 ```bash
 npm install
-npm run build       # tsc + copy SVG icons into dist/
+npm run dev         # setup ~/.n8n/custom stub, tsup --watch + N8N_DEV_RELOAD n8n (http://localhost:5678)
+npm run build       # one-off bundle into dist/
+npm run dev:watch   # watch only, no n8n
+npm run setup:custom # re-link package.json + dist into ~/.n8n/custom (avoid npm link — scans node_modules)
 npm run typecheck
 npm test            # vitest (pool lifecycle, credentials, supplyData, isolation)
 ```

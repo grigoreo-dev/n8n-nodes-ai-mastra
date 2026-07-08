@@ -19,6 +19,10 @@ export default defineConfig({
 		'nodes/MastraAgent/MastraAgent.node': 'nodes/MastraAgent/MastraAgent.node.ts',
 		'nodes/MemoryPostgresMastra/MemoryPostgresMastra.node':
 			'nodes/MemoryPostgresMastra/MemoryPostgresMastra.node.ts',
+		'nodes/ModelOpenAiCompatibleMastra/ModelOpenAiCompatibleMastra.node':
+			'nodes/ModelOpenAiCompatibleMastra/ModelOpenAiCompatibleMastra.node.ts',
+		'credentials/MastraOpenAiCompatibleApi.credentials':
+			'credentials/MastraOpenAiCompatibleApi.credentials.ts',
 	},
 	outDir: 'dist',
 	format: ['cjs'],
@@ -39,6 +43,10 @@ export default defineConfig({
 		const icons: Array<[string, string]> = [
 			['nodes/MastraAgent/mastra.svg', 'dist/nodes/MastraAgent/mastra.svg'],
 			['nodes/MemoryPostgresMastra/postgres.svg', 'dist/nodes/MemoryPostgresMastra/postgres.svg'],
+			[
+				'nodes/ModelOpenAiCompatibleMastra/mastra.svg',
+				'dist/nodes/ModelOpenAiCompatibleMastra/mastra.svg',
+			],
 		];
 		for (const [src, dest] of icons) {
 			mkdirSync(dest.substring(0, dest.lastIndexOf('/')), { recursive: true });
