@@ -37,21 +37,28 @@ export class MastraAgent implements INodeType {
 				AI: ['Agents'],
 			},
 		},
-		inputs: [
-			{ type: NodeConnectionTypes.Main },
-			{
-				type: NodeConnectionTypes.AiLanguageModel,
-				displayName: 'Model',
-				required: false,
-				maxConnections: 1,
-			},
-			{
-				type: NodeConnectionTypes.AiMemory,
-				displayName: 'Memory',
-				required: false,
-				maxConnections: 1,
-			},
-		],
+		inputs: `={{
+			[
+				'${NodeConnectionTypes.Main}',
+				{
+					type: '${NodeConnectionTypes.AiLanguageModel}',
+					displayName: 'Chat Model',
+					required: true,
+					maxConnections: 1,
+				},
+				{
+					type: '${NodeConnectionTypes.AiMemory}',
+					displayName: 'Memory',
+					required: false,
+					maxConnections: 1,
+				},
+				{
+					type: '${NodeConnectionTypes.AiTool}',
+					displayName: 'Tool',
+					required: false,
+				},
+			]
+		}}`,
 		outputs: [NodeConnectionTypes.Main],
 		credentials: [],
 		properties: [
