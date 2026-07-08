@@ -106,9 +106,22 @@ export class MastraAgent implements INodeType {
 
 		for (let itemIndex = 0; itemIndex < items.length; itemIndex++) {
 			try {
-				const prompt = this.getNodeParameter('prompt', itemIndex) as string;
+				const prompt = (this.getNodeParameter('prompt', itemIndex) as string)?.trim();
 				const instructions = this.getNodeParameter('instructions', itemIndex, '') as string;
 				const agentName = this.getNodeParameter('agentName', itemIndex, 'n8n Mastra Agent') as string;
+
+				// Guard against an empty prompt before calling Mastra. Otherwise Mastra
+				// sends `messages: []` to the model API, which fails deep in the SDK
+				// with an opaque "at least one message is required" 400. Common cause:
+				// a Chat Trigger whose Prompt field lost the `{{ $json.chatInput }}`
+				// mapping.
+				if (!prompt) {
+					throw new NodeOperationError(this.getNode(), 'Prompt is empty', {
+						description:
+							'The Prompt field resolved to an empty string. When triggering from the Chat Trigger, set Prompt to an expression like {{ $json.chatInput }} so the incoming chat message is passed to the agent.',
+						itemIndex,
+					});
+				}
 
 				// Model comes strictly from a connected Mastra Model sub-node, which
 				// supplies a full Mastra OpenAICompatibleConfig ({ id, url, apiKey }) so

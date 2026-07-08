@@ -21,18 +21,21 @@ vi.mock('@mastra/core/agent', () => ({
 
 import { MastraAgent } from '../nodes/MastraAgent/MastraAgent.node';
 
-function makeExecuteCtx(inputData: Record<string, unknown>) {
+function makeExecuteCtx(
+	inputData: Record<string, unknown>,
+	params: { prompt?: string; instructions?: string; agentName?: string } = {},
+) {
 	const ctx = mock<IExecuteFunctions>();
 	ctx.getNode.mockReturnValue(mock<INode>({ name: 'Mastra Agent', typeVersion: 1 }));
 	ctx.getInputData.mockReturnValue([{ json: { chatInput: 'Hello' } }]);
 	ctx.getNodeParameter.mockImplementation((name: string, _index: number, fallback?: unknown) => {
 		switch (name) {
 			case 'prompt':
-				return 'Hello';
+				return params.prompt ?? 'Hello';
 			case 'instructions':
-				return 'You are helpful.';
+				return params.instructions ?? 'You are helpful.';
 			case 'agentName':
-				return 'Test Agent';
+				return params.agentName ?? 'Test Agent';
 			default:
 				return fallback;
 		}
@@ -41,6 +44,18 @@ function makeExecuteCtx(inputData: Record<string, unknown>) {
 	ctx.continueOnFail.mockReturnValue(false);
 	return ctx;
 }
+
+const validModelInput = {
+	[NodeConnectionTypes.AiLanguageModel]: {
+		__isMastraModel: true,
+		config: {
+			providerId: 'openai-compatible',
+			modelId: 'test-model',
+			url: 'https://example.test',
+			apiKey: 'secret',
+		},
+	},
+};
 
 describe('MastraAgent description', () => {
 	it('exposes the standard n8n AI Agent inputs', () => {
@@ -69,6 +84,13 @@ describe('MastraAgent.execute validation', () => {
 		const ctx = makeExecuteCtx({ [NodeConnectionTypes.AiLanguageModel]: { invoke: vi.fn() } });
 
 		await expect(node.execute.call(ctx)).rejects.toThrow(/not a Mastra model/i);
+	});
+
+	it('rejects an empty prompt with a clear error (e.g. Chat Trigger with no chatInput mapping)', async () => {
+		const node = new MastraAgent();
+		const ctx = makeExecuteCtx(validModelInput, { prompt: '   ' });
+
+		await expect(node.execute.call(ctx)).rejects.toThrow(/prompt is empty/i);
 	});
 
 	it('rejects non-Mastra memory payloads', async () => {
