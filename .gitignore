@@ -7,3 +7,6 @@ dist/
 
 # upstream n8n clone kept locally as an implementation reference
 n8n/
+
+# local opencode config with secrets (MCP tokens)
+opencode.json
