@@ -5,6 +5,7 @@ interface N8nToolLike {
 	invoke?: (input: unknown) => Promise<unknown> | unknown;
 	call?: (input: unknown) => Promise<unknown> | unknown;
 	func?: (input: unknown) => Promise<unknown> | unknown;
+	_call?: (input: unknown) => Promise<unknown> | unknown;
 }
 
 interface N8nToolkitLike {
@@ -73,6 +74,63 @@ function uniqueName(baseName: string, usedNames: Set<string>): string {
 	return unique;
 }
 
+/**
+ * Reads the declared top-level properties of a tool schema, supporting both
+ * JSON Schema (`{ properties: {...} }`) and Zod object schemas (`.shape`).
+ * Returns the property map, or undefined when the schema is not an object schema.
+ */
+function schemaProperties(schema: unknown): Record<string, unknown> | undefined {
+	if (!isObject(schema)) return undefined;
+	const jsonProps = (schema as { properties?: unknown }).properties;
+	if (isObject(jsonProps)) return jsonProps as Record<string, unknown>;
+	const zodShape = (schema as { shape?: unknown }).shape;
+	if (isObject(zodShape)) return zodShape as Record<string, unknown>;
+	return undefined;
+}
+
+/**
+ * Detects whether a (sub)schema describes an object with named fields, in either
+ * JSON Schema (`type: 'object'` / has `properties`) or Zod (`.shape`) form.
+ */
+function isObjectSchema(schema: unknown): boolean {
+	if (!isObject(schema)) return false;
+	if ((schema as { type?: unknown }).type === 'object') return true;
+	if (isObject((schema as { properties?: unknown }).properties)) return true;
+	if (isObject((schema as { shape?: unknown }).shape)) return true;
+	return false;
+}
+
+/**
+ * The stock n8n MCP Client tool wraps a tool's argument object in a synthetic
+ * `{ value: <realSchema> }` whenever its internal zod instance fails to
+ * recognise the incoming schema as a ZodObject (a cross-package zod identity
+ * mismatch). The model then generates `{ value: { ...realArgs } }`, but the MCP
+ * server expects the flat arguments — leaving every field undefined otherwise.
+ *
+ * Strip a single `value` wrapper from the runtime input when either:
+ *   - the schema does not declare a `value` field at all, or
+ *   - the schema's sole field is `value` and that field is itself an object
+ *     schema (the synthetic MCP wrapper).
+ *
+ * A genuine single scalar `value` argument is preserved untouched.
+ */
+function unwrapValueWrapper(input: unknown, schema: unknown): unknown {
+	if (!isObject(input) || Array.isArray(input)) return input;
+	const keys = Object.keys(input);
+	if (keys.length !== 1 || keys[0] !== 'value') return input;
+
+	const props = schemaProperties(schema);
+	const schemaKeys = props ? Object.keys(props) : [];
+
+	if (!schemaKeys.includes('value')) {
+		return (input as { value: unknown }).value;
+	}
+	if (schemaKeys.length === 1 && isObjectSchema(props?.value)) {
+		return (input as { value: unknown }).value;
+	}
+	return input;
+}
+
 export function toMastraToolSet(toolConnections: unknown): MastraToolSet {
 	const usedNames = new Set<string>();
 	const toolSet: MastraToolSet = {};
@@ -80,14 +138,26 @@ export function toMastraToolSet(toolConnections: unknown): MastraToolSet {
 	for (const tool of flattenTools(toolConnections)) {
 		const sourceName = tool.name?.trim() || 'tool';
 		const name = uniqueName(sourceName, usedNames);
-		const execute = tool.invoke ?? tool.call ?? tool.func;
+		// Prefer the tool's `_call` over invoke/call/func. n8n wraps connected
+		// tools in a logging Proxy (@n8n/ai-utilities logWrapper) that only
+		// intercepts `_call` — calling it is what records the sub-node's
+		// input/output in the execution tree UI and emits the ai-tool-called
+		// event. `_call` also runs the raw executor without langchain's schema
+		// validation, which is required because MCP Client tools ship a synthetic
+		// `{ value: <realSchema> }` wrapper schema (a cross-package zod identity
+		// mismatch inside n8n) that would otherwise reject the real flat args.
+		const execute = tool._call ?? tool.func ?? tool.invoke ?? tool.call;
+		const schema = tool.schema;
 
 		if (!execute) continue;
 
 		toolSet[name] = {
 			description: tool.description,
-			parameters: tool.schema,
-			execute: async (input: unknown) => await execute.call(tool, input),
+			parameters: schema,
+			execute: async (input: unknown) => {
+				const args = unwrapValueWrapper(input, schema);
+				return await execute.call(tool, args);
+			},
 		};
 	}
 
