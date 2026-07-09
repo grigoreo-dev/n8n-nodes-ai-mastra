@@ -14,7 +14,13 @@ import { defineConfig } from 'tsup';
  * next to our nodes, so only our real *.node.js files exist. esbuild also
  * transpiles the ESM deps to CJS, so the require()-ESM interop bug disappears.
  */
-export default defineConfig({
+// Dev watch is driven by TSUP_WATCH=1 (not the tsup --watch CLI flag). The CLI
+// flag is a boolean that forces tsup to watch the whole cwd and overrides any
+// config `watch` value, so it can't be scoped. Setting `watch` to an array in
+// config is the only way to narrow what triggers a rebuild.
+const watchScope = process.env.TSUP_WATCH === '1' ? ['nodes', 'credentials'] : false;
+
+export default defineConfig(() => ({
 	entry: {
 		'nodes/MastraAgent/MastraAgent.node': 'nodes/MastraAgent/MastraAgent.node.ts',
 		'nodes/MemoryPostgresMastra/MemoryPostgresMastra.node':
@@ -28,13 +34,23 @@ export default defineConfig({
 	format: ['cjs'],
 	target: 'node20',
 	platform: 'node',
+	// Narrow the watch to our TypeScript source dirs (see watchScope above).
+	// Otherwise tsup watches the whole cwd and rebuilds on unrelated changes
+	// (opencode.json, docs, tests, compose/config files, editor scratch), which
+	// with N8N_DEV_RELOAD restarts n8n on every keystroke/tool write. `false`
+	// keeps a plain build a one-off that exits.
+	watch: watchScope,
 	// Inline everything...
 	noExternal: [/@mastra\/.*/, 'pg', 'zod'],
 	// ...except what n8n itself provides at runtime.
 	external: ['n8n-workflow'],
 	splitting: false,
 	sourcemap: true,
-	clean: true,
+	// Don't clean in watch mode: `clean` wipes dist on every rebuild, and n8n's
+	// hot-reload watcher (which watches dist) fires on each intermediate
+	// add/remove — turning one rebuild into a burst of reloads plus races
+	// ("Hot reload failed"). A one-off build still cleans.
+	clean: !watchScope,
 	dts: false,
 	// Preserve each node class as a named CJS export (n8n does require(file).ClassName).
 	cjsInterop: true,
@@ -54,4 +70,4 @@ export default defineConfig({
 		}
 		console.log('icons copied');
 	},
-});
+}));
