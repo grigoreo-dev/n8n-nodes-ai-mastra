@@ -26,7 +26,9 @@
   "scripts": {
     "build": "tsup",
     "setup:custom": "node scripts/setup-custom.mjs",
-    "dev": "npm run setup:custom && concurrently -k -n build,n8n -c blue,green \"tsup --watch\" \"cross-env N8N_DEV_RELOAD=true N8N_SECURE_COOKIE=false n8n start\"",
+    "dev:db": "docker compose -f docker-compose.dev.yml up -d --wait",
+    "dev:db:down": "docker compose -f docker-compose.dev.yml down",
+    "dev": "npm run setup:custom && npm run dev:db && concurrently -k -n build,n8n -c blue,green \"tsup --watch\" \"cross-env N8N_DEV_RELOAD=true N8N_SECURE_COOKIE=false n8n start\"",
     "dev:watch": "tsup --watch",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",

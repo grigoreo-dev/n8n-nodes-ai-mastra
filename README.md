@@ -73,14 +73,36 @@ Mastra scopes memory by **thread** (n8n session id) and **resource** (user id):
 
 ## Development
 
-Requires `n8n` on your PATH (`npm i -g n8n` or your usual install).
+Requires `n8n` on your PATH (`npm i -g n8n` or your usual install) and Docker
+(for the local memory database).
 
 ```bash
 npm install
-npm run dev         # setup ~/.n8n/custom stub, tsup --watch + N8N_DEV_RELOAD n8n (http://localhost:5678)
+npm run dev         # setup ~/.n8n/custom stub, start dev Postgres, tsup --watch + N8N_DEV_RELOAD n8n (http://localhost:5678)
 npm run build       # one-off bundle into dist/
 npm run dev:watch   # watch only, no n8n
+npm run dev:db      # start the local dev Postgres only (docker compose)
+npm run dev:db:down # stop the local dev Postgres (keeps data)
 npm run setup:custom # re-link package.json + dist into ~/.n8n/custom (avoid npm link — scans node_modules)
 npm run typecheck
 npm test            # vitest (pool lifecycle, credentials, supplyData, isolation)
 ```
+
+### Local memory database
+
+`npm run dev` (and `npm run dev:db`) start a throwaway PostgreSQL 17 container
+via `docker-compose.dev.yml` for testing agent memory. These are **local dev
+credentials, not secrets**:
+
+| Field    | Value           |
+| -------- | --------------- |
+| Host     | `localhost`     |
+| Port     | `5544`          |
+| Database | `mastra_memory` |
+| User     | `mastra`        |
+| Password | `mastra`        |
+
+Create an n8n **Postgres** credential with these values, connect a
+**Postgres Memory (Mastra)** node to a **Mastra Agent**, and the memory node
+creates its tables on first run. Wipe the data with
+`docker compose -f docker-compose.dev.yml down -v`.

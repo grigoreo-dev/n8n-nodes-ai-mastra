@@ -1,0 +1,32 @@
+# Local development PostgreSQL for testing Mastra Agent memory.
+#
+# This is a throwaway, LOCAL-ONLY database: the credentials below are not
+# secrets. Point an n8n "Postgres" credential at it (host localhost, port 5544,
+# database mastra_memory, user/password mastra) and connect a
+# "Postgres Memory (Mastra)" node to a Mastra Agent. The memory node creates its
+# own tables on first use.
+#
+#   npm run dev:db        # start (used automatically by npm run dev)
+#   npm run dev:db:down   # stop and keep data
+#   docker compose -f docker-compose.dev.yml down -v   # stop and wipe data
+
+services:
+  postgres:
+    image: postgres:17-alpine
+    container_name: n8n-mastra-dev-pg
+    environment:
+      POSTGRES_USER: mastra
+      POSTGRES_PASSWORD: mastra
+      POSTGRES_DB: mastra_memory
+    ports:
+      - '5544:5432'
+    volumes:
+      - mastra-dev-pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U mastra -d mastra_memory']
+      interval: 3s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  mastra-dev-pgdata:
