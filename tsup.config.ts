@@ -45,6 +45,13 @@ export default defineConfig(() => ({
 	// ...except what n8n itself provides at runtime.
 	external: ['n8n-workflow'],
 	splitting: false,
+	// Minify the bundle. Because we inline all of Mastra (noExternal), the
+	// unminified output is huge (~9 MB Agent / ~13 MB Memory). Minifying roughly
+	// halves that (~4 MB / ~6 MB), which also makes n8n's dist hot-reload watcher
+	// far more reliable — the large unminified bundle intermittently triggers
+	// "Hot reload failed". esbuild already tree-shakes on bundle, so minify is
+	// the main remaining size win. Source maps keep the output debuggable.
+	minify: true,
 	sourcemap: true,
 	// Don't clean in watch mode: `clean` wipes dist on every rebuild, and n8n's
 	// hot-reload watcher (which watches dist) fires on each intermediate
