@@ -99,6 +99,42 @@ describe('mapMemoryMessagesToN8n', () => {
 		]);
 	});
 
+	it('normalizes invalid Date createdAt values to undefined', () => {
+		const out = mapMemoryMessagesToN8n({
+			operation: 'recall',
+			messages: [{ id: 'msg-4', createdAt: new Date('not-a-date') }],
+		});
+
+		expect(out[0][0].json.messages).toEqual([
+			{
+				id: 'msg-4',
+				role: 'unknown',
+				text: '',
+				createdAt: undefined,
+				threadId: undefined,
+				resourceId: undefined,
+			},
+		]);
+	});
+
+	it('normalizes NaN numeric createdAt values to undefined', () => {
+		const out = mapMemoryMessagesToN8n({
+			operation: 'recall',
+			messages: [{ id: 'msg-5', createdAt: Number.NaN }],
+		});
+
+		expect(out[0][0].json.messages).toEqual([
+			{
+				id: 'msg-5',
+				role: 'unknown',
+				text: '',
+				createdAt: undefined,
+				threadId: undefined,
+				resourceId: undefined,
+			},
+		]);
+	});
+
 	it('handles empty message lists', () => {
 		const out = mapMemoryMessagesToN8n({ operation: 'recall', messages: [] });
 		expect(out).toEqual([

@@ -29,9 +29,13 @@ function textFromContent(content: unknown): string {
 }
 
 function normalizeCreatedAt(value: unknown): string | undefined {
-	if (value instanceof Date) return value.toISOString();
+	if (value instanceof Date) {
+		return Number.isFinite(value.getTime()) ? value.toISOString() : undefined;
+	}
 	if (typeof value === 'string') return value;
-	if (typeof value === 'number') return new Date(value).toISOString();
+	if (typeof value === 'number') {
+		return Number.isFinite(value) ? new Date(value).toISOString() : undefined;
+	}
 	return undefined;
 }
 
