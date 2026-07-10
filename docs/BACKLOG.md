@@ -46,25 +46,3 @@ prove the nodes work against the n8n version we target.
 **Acceptance:** A single command (and a GitHub Actions job) that imports the
 fixture workflows into a real n8n, runs them end-to-end with credentials wired
 up, and passes/fails based on their execution results.
-
-## Memory sub-node execution logs
-
-**Goal:** Show the Postgres memory sub-node in the execution tree with what the
-agent read from / wrote to the thread, like the Model sub-node now does for LLM
-calls.
-
-**Why:** Model logging landed (the Mastra Model node appears in the tree with
-prompt/response/tokens via a logging wrapper that captures the sub-node's
-`SupplyDataContext` and writes `addInputData`/`addOutputData` on the
-`ai_languageModel` connection — see `nodes/shared/modelLogging.ts`). Memory was
-scoped out of that iteration. The same capture-the-context technique applies:
-wrap the memory read/write path and log on the `ai_memory` connection.
-
-**Complication:** the mapping is fuzzier than the model's — memory thread
-messages have a different shape, and Mastra owns the read/write timing inside the
-agent, so the wrap point needs research (a processor like `processInput`, or a
-wrapper around the `@mastra/pg` store handed off from the sub-node).
-
-**Acceptance:** Running a workflow with `Mastra Agent` + connected memory shows,
-under the memory node in the execution view, the messages read from and written
-to the thread.

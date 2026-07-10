@@ -15,6 +15,17 @@ vi.mock('pg', () => {
 vi.mock('@mastra/pg', () => ({
 	PostgresStore: class {
 		constructor(public cfg: unknown) {}
+		async getStore(name: string) {
+			if (name !== 'memory') return {};
+			return {
+				async listMessages(_args: unknown) {
+					return { messages: [], total: 0, page: 0, perPage: 10, hasMore: false };
+				},
+				async saveMessages(_args: { messages?: unknown[] }) {
+					return { messages: [] };
+				},
+			};
+		}
 	},
 }));
 vi.mock('@mastra/memory', () => ({
@@ -92,6 +103,38 @@ describe('MemoryPostgresMastra.supplyData', () => {
 		expect(handoff.thread).toBe('thread-123');
 		expect(handoff.resource).toBe('user-42');
 		expect(typeof result.closeFunction).toBe('function');
+	});
+
+	it('wraps the storage so memory-store reads log on the ai_memory connection', async () => {
+		const ctx = makeCtx({
+			sessionIdType: 'customKey',
+			sessionKey: 'thread-logs',
+			resourceId: 'user-logs',
+			requireResourceId: true,
+		});
+		const inputCalls: unknown[] = [];
+		const outputCalls: unknown[] = [];
+		ctx.addInputData.mockImplementation((connectionType: string, data: unknown) => {
+			inputCalls.push([connectionType, data]);
+			return { index: 0 };
+		});
+		ctx.addOutputData.mockImplementation((connectionType: string, index: number, data: unknown) => {
+			outputCalls.push([connectionType, index, data]);
+		});
+
+		const result = await node.supplyData.call(ctx, 0);
+		const storage = (result.response as any).memory.cfg.storage as {
+			getStore(name: string): Promise<{
+				listMessages(args: unknown): Promise<unknown>;
+			}>;
+		};
+		const store = await storage.getStore('memory');
+
+		await store.listMessages({ threadId: 'thread-logs', resourceId: 'user-logs' });
+
+		expect(inputCalls[0][0]).toBe('ai_memory');
+		expect(outputCalls[0][0]).toBe('ai_memory');
+		expect((inputCalls[0][1] as any)[0][0].json.operation).toBe('recall');
 	});
 
 	it('resolves the thread from $json.sessionId in fromInput mode', async () => {
