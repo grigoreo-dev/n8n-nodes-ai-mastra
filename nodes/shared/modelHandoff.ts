@@ -22,6 +22,12 @@ import type { OpenAICompatibleConfig } from '@mastra/core/llm';
 export interface MastraModelHandoff {
 	__isMastraModel: true;
 	config: OpenAICompatibleConfig;
+	/**
+	 * The resolved LanguageModelV2, wrapped for execution-tree logging
+	 * (see nodes/shared/modelLogging.ts). The Agent passes this straight to
+	 * `new Agent({ model })`. `config` is retained for diagnostics.
+	 */
+	model: unknown;
 }
 
 export function isMastraModelHandoff(value: unknown): value is MastraModelHandoff {

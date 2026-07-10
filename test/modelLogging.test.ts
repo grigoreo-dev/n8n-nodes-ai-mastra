@@ -237,3 +237,17 @@ describe('wrapModelForLogging doStream', () => {
 		expect((calls.output[0][2] as Error).message).toBe('stream boom');
 	});
 });
+
+import { isMastraModelHandoff, type MastraModelHandoff } from '../nodes/shared/modelHandoff';
+
+describe('MastraModelHandoff with model', () => {
+	it('recognises a handoff carrying a wrapped model', () => {
+		const handoff: MastraModelHandoff = {
+			__isMastraModel: true,
+			config: { providerId: 'openai-compatible', modelId: 'm', url: 'http://x/v1', apiKey: 'k' },
+			model: { provider: 'p' },
+		};
+		expect(isMastraModelHandoff(handoff)).toBe(true);
+		expect(handoff.model).toBeDefined();
+	});
+});

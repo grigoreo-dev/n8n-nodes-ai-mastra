@@ -110,6 +110,10 @@ export class ModelOpenAiCompatibleMastra implements INodeType {
 				url,
 				apiKey,
 			},
+			// The resolved, logging-wrapped LanguageModelV2 is populated in a later
+			// step (resolve + wrap in supplyData). Until then the Agent falls back to
+			// `config`; see nodes/shared/modelHandoff.ts.
+			model: undefined,
 		};
 
 		return {
