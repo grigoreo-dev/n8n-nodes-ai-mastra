@@ -17,7 +17,9 @@ function isObject(value: unknown): value is Record<string, unknown> {
 function textFromParts(parts: unknown): string {
 	if (!Array.isArray(parts)) return '';
 	return parts
-		.map((part) => (isObject(part) && typeof part.text === 'string' ? part.text : ''))
+		.map((part) =>
+			isObject(part) && part.type === 'text' && typeof part.text === 'string' ? part.text : '',
+		)
 		.join('');
 }
 
@@ -33,7 +35,10 @@ function normalizeCreatedAt(value: unknown): string | undefined {
 		const timestamp = value.getTime();
 		return Number.isFinite(timestamp) ? value.toISOString() : undefined;
 	}
-	if (typeof value === 'string') return value;
+	if (typeof value === 'string') {
+		const date = new Date(value);
+		return Number.isFinite(date.getTime()) ? date.toISOString() : undefined;
+	}
 	if (typeof value === 'number') {
 		const date = new Date(value);
 		return Number.isFinite(date.getTime()) ? date.toISOString() : undefined;

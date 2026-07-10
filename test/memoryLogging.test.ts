@@ -80,6 +80,27 @@ describe('mapMemoryMessagesToN8n', () => {
 		]);
 	});
 
+	it('does not leak reasoning parts into the logged text', () => {
+		const out = mapMemoryMessagesToN8n({
+			operation: 'recall',
+			messages: [
+				{
+					id: 'msg-r',
+					role: 'assistant',
+					content: {
+						format: 2,
+						parts: [
+							{ type: 'reasoning', text: 'secret chain of thought' },
+							{ type: 'text', text: 'visible' },
+						],
+					},
+				},
+			],
+		});
+
+		expect((out[0][0].json.messages as Array<{ text: string }>)[0].text).toBe('visible');
+	});
+
 	it('tolerates missing content and unknown roles', () => {
 		const out = mapMemoryMessagesToN8n({
 			operation: 'recall',
@@ -158,6 +179,28 @@ describe('mapMemoryMessagesToN8n', () => {
 				resourceId: undefined,
 			},
 		]);
+	});
+
+	it('normalizes invalid string createdAt values to undefined', () => {
+		const out = mapMemoryMessagesToN8n({
+			operation: 'recall',
+			messages: [{ id: 'msg-7', createdAt: 'not-a-date' }],
+		});
+
+		expect((out[0][0].json.messages as Array<{ createdAt?: string }>)[0].createdAt).toBe(
+			undefined,
+		);
+	});
+
+	it('normalizes valid ISO string createdAt values to the same ISO instant', () => {
+		const out = mapMemoryMessagesToN8n({
+			operation: 'recall',
+			messages: [{ id: 'msg-8', createdAt: '2026-07-10T00:01:00.000Z' }],
+		});
+
+		expect((out[0][0].json.messages as Array<{ createdAt?: string }>)[0].createdAt).toBe(
+			'2026-07-10T00:01:00.000Z',
+		);
 	});
 
 	it('handles empty message lists', () => {

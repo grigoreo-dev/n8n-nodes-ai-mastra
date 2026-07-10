@@ -1,5 +1,7 @@
 # Memory Sub-Node Logging Implementation Plan
 
+> **Superseded during implementation:** live testing showed Mastra 1.49's agent chat path bypasses `Memory.recall`/`Memory.saveMessages` (it goes through the `MessageHistory` processor straight to `storage.getStore('memory')` → `store.listMessages`/`store.saveMessages`). The shipped implementation intercepts at the storage store level via instance monkey-patching (`wrapMemoryStorageForLogging`) — see the design spec `docs/superpowers/specs/2026-07-10-memory-sub-node-logging-design.md` and `nodes/shared/memoryLogging.ts` for the current architecture. The task bodies below reflect the original (pre-discovery) plan and its `normalizeCreatedAt` lacks the defensive date guards that the final code has.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Make the Postgres Memory (Mastra) sub-node appear in n8n's execution tree when Mastra reads from or writes to memory.
