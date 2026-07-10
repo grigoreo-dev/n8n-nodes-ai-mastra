@@ -10,6 +10,7 @@ import {
 import { DEFAULT_MAX_CONNECTIONS, pgPoolManager } from '../shared/poolManager';
 import type { PostgresCredential } from '../shared/pgCredentials';
 import type { MastraMemoryHandoff } from '../shared/memoryHandoff';
+import { wrapMemoryForLogging } from '../shared/memoryLogging';
 import { getResourceId, getThreadId } from '../shared/session';
 
 /**
@@ -193,11 +194,16 @@ export class MemoryPostgresMastra implements INodeType {
 			},
 		});
 
+		const wrappedMemory = wrapMemoryForLogging(
+			memory as unknown as Record<string, unknown>,
+			this,
+		) as unknown as typeof memory;
+
 		// n8n's getInputConnectionData returns this `response` object verbatim and
 		// drops SupplyData.metadata, so thread/resource must ride ON the response.
 		const handoff: MastraMemoryHandoff = {
 			__isMastraMemory: true,
-			memory,
+			memory: wrappedMemory,
 			thread: threadId,
 			resource: resourceId,
 		};
