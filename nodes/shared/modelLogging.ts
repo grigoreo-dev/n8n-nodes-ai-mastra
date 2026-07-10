@@ -130,26 +130,31 @@ export function wrapModelForLogging<T extends Record<string, unknown>>(
 					const passthrough = new ReadableStream({
 						async start(controller) {
 							const reader = sourceStream.getReader();
+							// Always release the source reader lock, on every terminal path.
 							try {
-								for (;;) {
-									const { done, value } = await reader.read();
-									if (done) break;
-									const part = value as Record<string, unknown>;
-									if (part?.type === 'text-delta' && typeof part.delta === 'string') {
-										text += part.delta;
-									} else if (part?.type === 'finish') {
-										usage = part.usage as typeof usage;
-										finishReason = part.finishReason;
+								try {
+									for (;;) {
+										const { done, value } = await reader.read();
+										if (done) break;
+										const part = value as Record<string, unknown>;
+										if (part?.type === 'text-delta' && typeof part.delta === 'string') {
+											text += part.delta;
+										} else if (part?.type === 'finish') {
+											usage = part.usage as typeof usage;
+											finishReason = part.finishReason;
+										}
+										controller.enqueue(value);
 									}
-									controller.enqueue(value);
+								} catch (error) {
+									safeAddOutput(ctx, index, error);
+									controller.error(error);
+									return;
 								}
-							} catch (error) {
-								safeAddOutput(ctx, index, error);
-								controller.error(error);
-								return;
+								controller.close();
+								safeAddOutput(ctx, index, mapResultToN8n({ text, finishReason, usage }));
+							} finally {
+								reader.releaseLock();
 							}
-							controller.close();
-							safeAddOutput(ctx, index, mapResultToN8n({ text, finishReason, usage }));
 						},
 					});
 

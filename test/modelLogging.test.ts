@@ -215,4 +215,25 @@ describe('wrapModelForLogging doStream', () => {
 		expect(seen).toContainEqual(err);
 		expect(calls.output.length).toBe(1); // still logged something on close
 	});
+
+	it('logs and propagates an error from a genuinely erroring source stream', async () => {
+		const { ctx, calls } = makeCtx();
+		const erroringStream = new ReadableStream({
+			start(controller) {
+				controller.enqueue({ type: 'text-delta', id: '1', delta: 'x' });
+				controller.error(new Error('stream boom'));
+			},
+		});
+		const base = {
+			provider: 'p', modelId: 'm', specificationVersion: 'v2',
+			doGenerate: async () => ({}),
+			doStream: async () => ({ stream: erroringStream }),
+		};
+		const wrapped = wrapModelForLogging(base, ctx);
+		const { stream } = (await wrapped.doStream({ prompt: [] })) as any;
+
+		await expect(drain(stream)).rejects.toThrow('stream boom');
+		expect(calls.output.length).toBe(1);
+		expect((calls.output[0][2] as Error).message).toBe('stream boom');
+	});
 });
