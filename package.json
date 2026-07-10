@@ -20,7 +20,7 @@
     "url": "https://github.com/grigoreo/n8n-nodes-ai-mastra.git"
   },
   "engines": {
-    "node": ">=20.15"
+    "node": ">=22.22"
   },
   "main": "index.js",
   "scripts": {
