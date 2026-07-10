@@ -15,17 +15,22 @@ vi.mock('pg', () => {
 vi.mock('@mastra/pg', () => ({
 	PostgresStore: class {
 		constructor(public cfg: unknown) {}
+		async getStore(name: string) {
+			if (name !== 'memory') return {};
+			return {
+				async listMessages(_args: unknown) {
+					return { messages: [], total: 0, page: 0, perPage: 10, hasMore: false };
+				},
+				async saveMessages(_args: { messages?: unknown[] }) {
+					return { messages: [] };
+				},
+			};
+		}
 	},
 }));
 vi.mock('@mastra/memory', () => ({
 	Memory: class {
 		constructor(public cfg: unknown) {}
-		async recall(_args: unknown) {
-			return { messages: [], total: 0, page: 0, perPage: false, hasMore: false };
-		}
-		async saveMessages(args: { messages?: unknown[] }) {
-			return { messages: args.messages ?? [] };
-		}
 	},
 }));
 
@@ -100,7 +105,7 @@ describe('MemoryPostgresMastra.supplyData', () => {
 		expect(typeof result.closeFunction).toBe('function');
 	});
 
-	it('wraps the memory handoff so recall logs on the ai_memory connection', async () => {
+	it('wraps the storage so memory-store reads log on the ai_memory connection', async () => {
 		const ctx = makeCtx({
 			sessionIdType: 'customKey',
 			sessionKey: 'thread-logs',
@@ -118,9 +123,14 @@ describe('MemoryPostgresMastra.supplyData', () => {
 		});
 
 		const result = await node.supplyData.call(ctx, 0);
-		const handoff = result.response as { memory: { recall(args: unknown): Promise<unknown> } };
+		const storage = (result.response as any).memory.cfg.storage as {
+			getStore(name: string): Promise<{
+				listMessages(args: unknown): Promise<unknown>;
+			}>;
+		};
+		const store = await storage.getStore('memory');
 
-		await handoff.memory.recall({ threadId: 'thread-logs', resourceId: 'user-logs' });
+		await store.listMessages({ threadId: 'thread-logs', resourceId: 'user-logs' });
 
 		expect(inputCalls[0][0]).toBe('ai_memory');
 		expect(outputCalls[0][0]).toBe('ai_memory');

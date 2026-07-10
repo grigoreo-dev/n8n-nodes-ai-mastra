@@ -179,7 +179,7 @@ describe('mapMemoryMessagesToN8n', () => {
 	});
 });
 
-import { AI_MEMORY_CONNECTION, wrapMemoryForLogging } from '../nodes/shared/memoryLogging';
+import { AI_MEMORY_CONNECTION, wrapMemoryStorageForLogging } from '../nodes/shared/memoryLogging';
 
 function makeCtx() {
 	const calls: { input: unknown[]; output: unknown[] } = { input: [], output: [] };
@@ -195,72 +195,176 @@ function makeCtx() {
 	return { ctx, calls };
 }
 
-describe('wrapMemoryForLogging recall', () => {
-	it('logs recall input and output and returns the original result', async () => {
+interface FakeStore extends Record<string, unknown> {
+	listMessages(args: unknown): Promise<unknown>;
+	saveMessages(args: { messages?: unknown[] }): Promise<unknown>;
+}
+
+function makeStorage(overrides?: Partial<FakeStore>) {
+	const listResult = {
+		messages: [{ id: 'm1', role: 'user', content: { format: 2, content: 'remembered' } }],
+		total: 1,
+		page: 0,
+		perPage: 10,
+		hasMore: false,
+	};
+	const memoryStore: FakeStore = {
+		async listMessages(_args: unknown) {
+			return listResult;
+		},
+		async saveMessages(args: { messages?: unknown[] }) {
+			return { messages: args.messages ?? [] };
+		},
+		...overrides,
+	};
+	const otherStore: FakeStore = {
+		async listMessages(_args: unknown) {
+			return { messages: [] };
+		},
+		async saveMessages(_args: { messages?: unknown[] }) {
+			return { messages: [] };
+		},
+	};
+	const storage = {
+		async getStore(name: string) {
+			return name === 'memory' ? memoryStore : otherStore;
+		},
+	};
+	return { storage, memoryStore, otherStore, listResult };
+}
+
+describe('wrapMemoryStorageForLogging listMessages', () => {
+	it('logs listMessages input and output and returns the original result', async () => {
 		const { ctx, calls } = makeCtx();
-		const result = {
-			messages: [{ id: 'm1', role: 'user', content: { format: 2, content: 'remembered' } }],
-			usage: { tokens: 7 },
-			total: 1,
-			page: 0,
-			perPage: 10,
-			hasMore: false,
-		};
-		const base = {
-			provider: 'memory',
-			recall: async (_args: unknown) => result,
-			saveMessages: async (_args: unknown) => ({ messages: [] }),
-		};
+		const { storage, listResult } = makeStorage();
 
-		const wrapped = wrapMemoryForLogging(base, ctx);
-		const out = await wrapped.recall({ threadId: 'thread-1', resourceId: 'user-1' });
+		const wrapped = wrapMemoryStorageForLogging(storage, ctx);
+		expect(wrapped).toBe(storage);
 
-		expect(out).toBe(result);
+		const store = (await wrapped.getStore('memory')) as FakeStore;
+		const out = await store.listMessages({ threadId: 'thread-1', resourceId: 'user-1' });
+
+		expect(out).toBe(listResult);
 		expect(calls.input[0][0]).toBe(AI_MEMORY_CONNECTION);
 		expect(calls.output[0][0]).toBe(AI_MEMORY_CONNECTION);
 		expect((calls.input[0][1] as any)[0][0].json.operation).toBe('recall');
 		expect((calls.input[0][1] as any)[0][0].json.threadId).toBe('thread-1');
+		expect((calls.output[0][2] as any)[0][0].json.operation).toBe('recall');
 		expect((calls.output[0][2] as any)[0][0].json.messages[0].text).toBe('remembered');
-		expect((calls.output[0][2] as any)[0][0].json.tokenUsage.totalTokens).toBe(7);
 	});
 
-	it('logs and rethrows recall errors', async () => {
+	it('logs and rethrows listMessages errors', async () => {
 		const { ctx, calls } = makeCtx();
-		const boom = new Error('recall failed');
-		const base = {
-			recall: async () => {
+		const boom = new Error('list failed');
+		const { storage } = makeStorage({
+			async listMessages() {
 				throw boom;
 			},
-			saveMessages: async (_args: unknown) => ({ messages: [] }),
-		};
-		const wrapped = wrapMemoryForLogging(base, ctx);
+		});
 
-		await expect(wrapped.recall({ threadId: 'thread-1' })).rejects.toBe(boom);
+		const wrapped = wrapMemoryStorageForLogging(storage, ctx);
+		const store = (await wrapped.getStore('memory')) as FakeStore;
+
+		await expect(store.listMessages({ threadId: 'thread-1' })).rejects.toBe(boom);
 		expect(calls.output[0][2]).toBe(boom);
 	});
 });
 
-describe('wrapMemoryForLogging saveMessages', () => {
+describe('wrapMemoryStorageForLogging saveMessages', () => {
 	it('logs saveMessages input and output and returns the original result', async () => {
 		const { ctx, calls } = makeCtx();
-		const saved = [{ id: 'm2', role: 'assistant', threadId: 'thread-1', resourceId: 'user-1', content: { format: 2, content: 'saved' } }];
-		const result = { messages: saved, usage: { tokens: 5 } };
-		const base = {
-			recall: async (_args: unknown) => ({ messages: [] }),
-			saveMessages: async (_args: unknown) => result,
-		};
+		const saved = [
+			{
+				id: 'm2',
+				role: 'assistant',
+				threadId: 'thread-1',
+				resourceId: 'user-1',
+				content: { format: 2, content: 'saved' },
+			},
+		];
+		const result = { messages: saved };
+		const { storage } = makeStorage({
+			async saveMessages() {
+				return result;
+			},
+		});
 
-		const wrapped = wrapMemoryForLogging(base, ctx);
-		const out = await wrapped.saveMessages({ messages: saved });
+		const wrapped = wrapMemoryStorageForLogging(storage, ctx);
+		const store = (await wrapped.getStore('memory')) as FakeStore;
+		const out = await store.saveMessages({ messages: saved });
 
 		expect(out).toBe(result);
 		expect((calls.input[0][1] as any)[0][0].json.operation).toBe('saveMessages');
+		expect((calls.input[0][1] as any)[0][0].json.threadId).toBe('thread-1');
 		expect((calls.input[0][1] as any)[0][0].json.messages[0].text).toBe('saved');
+		expect((calls.output[0][2] as any)[0][0].json.operation).toBe('saveMessages');
 		expect((calls.output[0][2] as any)[0][0].json.messageCount).toBe(1);
-		expect((calls.output[0][2] as any)[0][0].json.tokenUsage.totalTokens).toBe(5);
 	});
 
-	it('does not crash memory calls when the logger throws', async () => {
+	it('handles array-shaped saveMessages results', async () => {
+		const { ctx, calls } = makeCtx();
+		const saved = [{ id: 'm3', role: 'assistant', content: { format: 2, content: 'arr' } }];
+		const { storage } = makeStorage({
+			async saveMessages() {
+				return saved;
+			},
+		});
+
+		const wrapped = wrapMemoryStorageForLogging(storage, ctx);
+		const store = (await wrapped.getStore('memory')) as FakeStore;
+		const out = await store.saveMessages({ messages: saved });
+
+		expect(out).toBe(saved);
+		expect((calls.output[0][2] as any)[0][0].json.messages[0].text).toBe('arr');
+	});
+
+	it('logs and rethrows saveMessages errors', async () => {
+		const { ctx, calls } = makeCtx();
+		const boom = new Error('save failed');
+		const { storage } = makeStorage({
+			async saveMessages() {
+				throw boom;
+			},
+		});
+
+		const wrapped = wrapMemoryStorageForLogging(storage, ctx);
+		const store = (await wrapped.getStore('memory')) as FakeStore;
+
+		await expect(store.saveMessages({ messages: [] })).rejects.toBe(boom);
+		expect(calls.output[0][2]).toBe(boom);
+	});
+});
+
+describe('wrapMemoryStorageForLogging wrapping behavior', () => {
+	it('does not wrap non-memory stores', async () => {
+		const { ctx, calls } = makeCtx();
+		const { storage, otherStore } = makeStorage();
+
+		const wrapped = wrapMemoryStorageForLogging(storage, ctx);
+		const store = (await wrapped.getStore('other')) as FakeStore;
+
+		expect(store).toBe(otherStore);
+		await store.listMessages({ threadId: 'thread-1' });
+		expect(calls.input).toHaveLength(0);
+		expect(calls.output).toHaveLength(0);
+	});
+
+	it('does not double-wrap the memory store across getStore calls', async () => {
+		const { ctx, calls } = makeCtx();
+		const { storage } = makeStorage();
+
+		const wrapped = wrapMemoryStorageForLogging(storage, ctx);
+		const first = (await wrapped.getStore('memory')) as FakeStore;
+		const second = (await wrapped.getStore('memory')) as FakeStore;
+		expect(second).toBe(first);
+
+		await second.listMessages({ threadId: 'thread-1' });
+
+		expect(calls.input).toHaveLength(1);
+		expect(calls.output).toHaveLength(1);
+	});
+
+	it('does not crash store calls when the logger throws', async () => {
 		const badCtx = {
 			addInputData: () => {
 				throw new Error('log failed');
@@ -269,25 +373,12 @@ describe('wrapMemoryForLogging saveMessages', () => {
 				throw new Error('log failed');
 			},
 		};
-		const result = { messages: [] };
-		const base = {
-			recall: async (_args: unknown) => ({ messages: [] }),
-			saveMessages: async (_args: unknown) => result,
-		};
-		const wrapped = wrapMemoryForLogging(base, badCtx);
+		const { storage, listResult } = makeStorage();
 
-		await expect(wrapped.saveMessages({ messages: [] })).resolves.toBe(result);
-	});
+		const wrapped = wrapMemoryStorageForLogging(storage, badCtx);
+		const store = (await wrapped.getStore('memory')) as FakeStore;
 
-	it('passes non-intercepted members through unchanged', () => {
-		const { ctx } = makeCtx();
-		const base = {
-			customValue: 'keep-me',
-			recall: async (_args: unknown) => ({ messages: [] }),
-			saveMessages: async (_args: unknown) => ({ messages: [] }),
-		};
-		const wrapped = wrapMemoryForLogging(base, ctx);
-
-		expect(wrapped.customValue).toBe('keep-me');
+		await expect(store.listMessages({ threadId: 't' })).resolves.toBe(listResult);
+		await expect(store.saveMessages({ messages: [] })).resolves.toEqual({ messages: [] });
 	});
 });

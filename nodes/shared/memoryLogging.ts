@@ -104,83 +104,135 @@ function firstMessageScope(messages: unknown[]): { threadId?: string; resourceId
 	};
 }
 
-export function wrapMemoryForLogging<T extends Record<string, unknown>>(
-	memory: T,
-	ctx: MemoryLogContext,
-): T {
-	return new Proxy(memory, {
-		get(target, prop, receiver) {
-			if (prop === 'recall') {
-				const original = target.recall as (args: Record<string, unknown>) => Promise<Record<string, unknown>>;
-				return async (args: Record<string, unknown>) => {
-					const index = safeAddInput(
-						ctx,
-						mapMemoryMessagesToN8n({
-							operation: 'recall',
-							threadId: typeof args?.threadId === 'string' ? args.threadId : undefined,
-							resourceId: typeof args?.resourceId === 'string' ? args.resourceId : undefined,
-							messages: [],
-						}),
-					);
-					try {
-						const result = await original.call(target, args);
-						safeAddOutput(
-							ctx,
-							index,
-							mapMemoryMessagesToN8n({
-								operation: 'recall',
-								threadId: typeof args?.threadId === 'string' ? args.threadId : undefined,
-								resourceId: typeof args?.resourceId === 'string' ? args.resourceId : undefined,
-								messages: Array.isArray(result.messages) ? result.messages : [],
-								usage: isObject(result.usage) ? (result.usage as { tokens?: number }) : undefined,
-							}),
-						);
-						return result;
-					} catch (error) {
-						safeAddOutput(ctx, index, error);
-						throw error;
-					}
-				};
-			}
+function safeMapPayload(build: () => N8nLogPayload, operation: MemoryLogInput['operation']): N8nLogPayload {
+	try {
+		return build();
+	} catch {
+		// Mapping must never break the store call: fall back to a minimal payload.
+		return [[{ json: { operation } }]];
+	}
+}
 
-			if (prop === 'saveMessages') {
-				const original = target.saveMessages as (args: { messages?: unknown[] }) => Promise<Record<string, unknown>>;
-				return async (args: { messages?: unknown[] }) => {
-					const inputMessages = Array.isArray(args?.messages) ? args.messages : [];
-					const inputScope = firstMessageScope(inputMessages);
-					const index = safeAddInput(
-						ctx,
+// getStore('memory') is called multiple times per run; never wrap the same
+// store object twice.
+const wrappedMemoryStores = new WeakSet<object>();
+
+function wrapMemoryStoreForLogging(store: Record<string, unknown>, ctx: MemoryLogContext): void {
+	if (wrappedMemoryStores.has(store)) return;
+	wrappedMemoryStores.add(store);
+
+	// Monkey-patch on the instance (no Proxy): Mastra store classes may use
+	// private class fields, and Proxy receivers break `#private` access.
+	if (typeof store.listMessages === 'function') {
+		const originalList = (store.listMessages as (args: Record<string, unknown>) => Promise<unknown>).bind(
+			store,
+		);
+		store.listMessages = async (args: Record<string, unknown>) => {
+			const threadId = typeof args?.threadId === 'string' ? args.threadId : undefined;
+			const resourceId = typeof args?.resourceId === 'string' ? args.resourceId : undefined;
+			const index = safeAddInput(
+				ctx,
+				safeMapPayload(
+					() => mapMemoryMessagesToN8n({ operation: 'recall', threadId, resourceId, messages: [] }),
+					'recall',
+				),
+			);
+			try {
+				const result = await originalList(args);
+				const messages =
+					isObject(result) && Array.isArray(result.messages) ? result.messages : [];
+				safeAddOutput(
+					ctx,
+					index,
+					safeMapPayload(
+						() => mapMemoryMessagesToN8n({ operation: 'recall', threadId, resourceId, messages }),
+						'recall',
+					),
+				);
+				return result;
+			} catch (error) {
+				safeAddOutput(ctx, index, error);
+				throw error;
+			}
+		};
+	}
+
+	if (typeof store.saveMessages === 'function') {
+		const originalSave = (store.saveMessages as (args: { messages?: unknown[] }) => Promise<unknown>).bind(
+			store,
+		);
+		store.saveMessages = async (args: { messages?: unknown[] }) => {
+			const inputMessages = Array.isArray(args?.messages) ? args.messages : [];
+			const scope = firstMessageScope(inputMessages);
+			const index = safeAddInput(
+				ctx,
+				safeMapPayload(
+					() =>
 						mapMemoryMessagesToN8n({
 							operation: 'saveMessages',
-							threadId: inputScope.threadId,
-							resourceId: inputScope.resourceId,
+							threadId: scope.threadId,
+							resourceId: scope.resourceId,
 							messages: inputMessages,
 						}),
-					);
-					try {
-						const result = await original.call(target, args);
-						const outputMessages = Array.isArray(result.messages) ? result.messages : [];
-						const outputScope = firstMessageScope(outputMessages);
-						safeAddOutput(
-							ctx,
-							index,
+					'saveMessages',
+				),
+			);
+			try {
+				const result = await originalSave(args);
+				const resultMessages = Array.isArray(result)
+					? result
+					: isObject(result) && Array.isArray(result.messages)
+						? result.messages
+						: undefined;
+				const outputMessages = resultMessages ?? inputMessages;
+				const outputScope = firstMessageScope(outputMessages);
+				safeAddOutput(
+					ctx,
+					index,
+					safeMapPayload(
+						() =>
 							mapMemoryMessagesToN8n({
 								operation: 'saveMessages',
-								threadId: outputScope.threadId ?? inputScope.threadId,
-								resourceId: outputScope.resourceId ?? inputScope.resourceId,
+								threadId: outputScope.threadId ?? scope.threadId,
+								resourceId: outputScope.resourceId ?? scope.resourceId,
 								messages: outputMessages,
-								usage: isObject(result.usage) ? (result.usage as { tokens?: number }) : undefined,
 							}),
-						);
-						return result;
-					} catch (error) {
-						safeAddOutput(ctx, index, error);
-						throw error;
-					}
-				};
+						'saveMessages',
+					),
+				);
+				return result;
+			} catch (error) {
+				safeAddOutput(ctx, index, error);
+				throw error;
 			}
+		};
+	}
+}
 
-			return Reflect.get(target, prop, receiver);
-		},
-	});
+/**
+ * Intercept memory reads/writes at the storage store level.
+ *
+ * Mastra's agent chat path does NOT call `Memory.recall`/`Memory.saveMessages`:
+ * the `MessageHistory` input processor calls `storage.getStore('memory')` and
+ * then `store.listMessages(...)` / `store.saveMessages(...)` directly. The
+ * store-domain object is the single choke point that also covers
+ * `Memory.recall`/`Memory.saveMessages` side paths (title generation etc.).
+ */
+export function wrapMemoryStorageForLogging<T extends Record<string, unknown>>(
+	storage: T,
+	ctx: MemoryLogContext,
+): T {
+	const target = storage as Record<string, unknown>;
+	if (typeof target.getStore !== 'function') return storage;
+	const originalGetStore = (target.getStore as (name: string) => Promise<unknown>).bind(storage);
+
+	target.getStore = async (name: string) => {
+		const store = await originalGetStore(name);
+		if (name === 'memory' && isObject(store)) {
+			wrapMemoryStoreForLogging(store, ctx);
+		}
+		return store;
+	};
+
+	return storage;
 }

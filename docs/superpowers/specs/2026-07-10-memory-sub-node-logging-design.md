@@ -17,17 +17,20 @@ resolved `LanguageModelV2` and writing to the captured sub-node
 `ai_languageModel` connection.
 
 Memory needs the same n8n pattern, but the wrap point is different. The memory
-sub-node creates a live `@mastra/memory` `Memory` instance and passes it to the
-agent through `MastraMemoryHandoff`. Mastra core calls the memory instance's
-public methods during `agent.stream`:
+sub-node creates a live `@mastra/memory` `Memory` instance (backed by a
+`PostgresStore`) and passes it to the agent through `MastraMemoryHandoff`.
 
-- `memory.recall(args)` when reading prior thread messages.
-- `memory.saveMessages({ messages, ... })` when persisting new messages.
+In Mastra 1.49 the agent's normal chat path does NOT call `Memory.recall` or
+`Memory.saveMessages`. Instead, `memory.getInputProcessors()` creates a
+`MessageHistory` processor with `storage.getStore('memory')` — a store-domain
+object. Reads go `MessageHistory.processInput` → `store.listMessages(...)` and
+writes go `MessageHistory.processOutputResult` → `store.saveMessages(...)`,
+bypassing the `Memory` methods entirely.
 
-Those methods are the correct interception boundary. Wrapping the lower-level
-`PostgresStore` would be noisier and more coupled to storage internals, while
-wrapping `agent.stream` would require extra database reads and would not show
-what Mastra actually used.
+The correct single choke point is therefore the store-domain object returned
+by `storage.getStore('memory')`: both the `MessageHistory` processor AND
+`Memory.recall`/`Memory.saveMessages` (used for side paths such as title
+generation) funnel through its `listMessages` and `saveMessages`.
 
 ## Architecture
 
@@ -39,18 +42,30 @@ It will export:
 
 - `AI_MEMORY_CONNECTION = 'ai_memory'`
 - `mapMemoryMessagesToN8n(...)`
-- `wrapMemoryForLogging(memory, ctx)`
+- `wrapMemoryStorageForLogging(storage, ctx)`
 
-`MemoryPostgresMastra.supplyData` will continue to create the real `Memory`
-instance, then wrap it before putting it on the handoff:
+`wrapMemoryStorageForLogging` monkey-patches `storage.getStore` on the
+instance (binding the original first). When `getStore('memory')` resolves, the
+returned store's `listMessages` and `saveMessages` are monkey-patched in place
+to log input/output on the `ai_memory` connection; other store names pass
+through untouched. A module-level `WeakSet` keeps the same store object from
+being wrapped twice, since `getStore` is called multiple times per run.
+
+Proxies are avoided in favor of instance monkey-patching because Mastra store
+classes may use private class fields (`#private`), and Proxy receivers break
+private-field access.
+
+`MemoryPostgresMastra.supplyData` wraps the storage before constructing the
+`Memory` instance and hands off the plain memory:
 
 ```ts
-const memory = new Memory(...);
-const wrappedMemory = wrapMemoryForLogging(memory, this);
+const storage = new PostgresStore(...);
+wrapMemoryStorageForLogging(storage, this);
+const memory = new Memory({ storage, ... });
 
 const handoff: MastraMemoryHandoff = {
   __isMastraMemory: true,
-  memory: wrappedMemory,
+  memory,
   thread: threadId,
   resource: resourceId,
 };
@@ -99,19 +114,19 @@ Mastra versions, and may include data that is less useful in the execution tree.
 
 ### Recall
 
-When Mastra calls `memory.recall(args)`:
+When Mastra calls `store.listMessages(args)`:
 
 1. Log an input item on `ai_memory` containing operation `recall`, `threadId`,
    `resourceId`, and any query/search summary available from `args`.
-2. Call the original `recall` method.
+2. Call the original `listMessages` method.
 3. Log an output item on the same index containing operation `recall`,
    `threadId`, `resourceId`, message count, optional token usage, and the
-   normalized messages returned by memory.
-4. Return the original `recall` result unchanged.
+   normalized messages returned by the store.
+4. Return the original `listMessages` result unchanged.
 
 ### Save Messages
 
-When Mastra calls `memory.saveMessages({ messages, ... })`:
+When Mastra calls `store.saveMessages({ messages, ... })`:
 
 1. Log an input item on `ai_memory` containing operation `saveMessages`,
    message count, and normalized messages requested for persistence.
@@ -133,10 +148,12 @@ Logging must never break the agent path.
 - If `addInputData` throws, swallow the logging error and continue the memory
   operation.
 - If `addOutputData` throws, swallow the logging error.
-- If `recall` or `saveMessages` throws, attempt to log the original error as the
-  output, then rethrow the original error.
-- Non-intercepted properties and methods on the memory instance should pass
-  through unchanged via `Reflect.get`.
+- If `listMessages` or `saveMessages` throws, attempt to log the original error
+  as the output, then rethrow the original error.
+- If building the mapped payload throws, fall back to a minimal
+  `{ operation }` payload so the store call is never broken by the mapper.
+- Only `getStore`, `listMessages`, and `saveMessages` are patched; everything
+  else on the storage and store instances is untouched.
 
 This matches the model logging behavior: execution-tree logging is diagnostic,
 not part of the correctness path.
@@ -149,13 +166,13 @@ Add unit tests for the shared memory logging module:
   `resourceId`, count, and token usage.
 - Text extraction handles `content.content`, `content.parts`, missing content,
   and non-text parts without throwing.
-- `wrapMemoryForLogging(...).recall(...)` logs input and output and returns the
-  original result.
-- `wrapMemoryForLogging(...).saveMessages(...)` logs input and output and
-  returns the original result.
-- Original memory errors are logged and rethrown.
-- Logger failures do not break memory calls.
-- Non-intercepted memory properties/methods pass through unchanged.
+- The store returned by `getStore('memory')` logs input and output for
+  `listMessages` (operation `recall`) and `saveMessages`, returning the
+  original results unchanged.
+- Stores returned for other names are not wrapped.
+- Calling `getStore('memory')` twice does not double-wrap the store.
+- Original store errors are logged and rethrown.
+- Logger failures do not break store calls.
 
 Existing typecheck, unit test, and build jobs should remain green.
 
@@ -173,7 +190,8 @@ Existing typecheck, unit test, and build jobs should remain green.
 
 ## Out of Scope
 
-- Store-level Postgres operation logging.
+- Raw SQL / Postgres query-level logging (only the store-domain
+  `listMessages`/`saveMessages` calls are logged).
 - Raw `MastraDBMessage` dumps, provider metadata, tool payloads, or arbitrary
   message metadata in the execution tree.
 - A UI toggle for memory log verbosity.
