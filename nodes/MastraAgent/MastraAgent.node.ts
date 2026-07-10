@@ -150,7 +150,10 @@ export class MastraAgent implements INodeType {
 						},
 					);
 				}
-				const model: ConstructorParameters<typeof AgentType>[0]['model'] = connectedModel.config;
+				// Prefer the wrapped, logging-enabled model; fall back to the raw
+				// config if an older handoff without `model` is connected.
+				const model: ConstructorParameters<typeof AgentType>[0]['model'] = (connectedModel.model ??
+					connectedModel.config) as ConstructorParameters<typeof AgentType>[0]['model'];
 
 				// Optional memory sub-node. getInputConnectionData returns the memory
 				// node's `response` object verbatim (or undefined if nothing connected).
