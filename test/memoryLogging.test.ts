@@ -135,6 +135,31 @@ describe('mapMemoryMessagesToN8n', () => {
 		]);
 	});
 
+	it('normalizes out-of-range numeric createdAt values to undefined', () => {
+		expect(() =>
+			mapMemoryMessagesToN8n({
+				operation: 'recall',
+				messages: [{ id: 'msg-6', createdAt: 8640000000000001 }],
+			}),
+		).not.toThrow();
+
+		const out = mapMemoryMessagesToN8n({
+			operation: 'recall',
+			messages: [{ id: 'msg-6', createdAt: 8640000000000001 }],
+		});
+
+		expect(out[0][0].json.messages).toEqual([
+			{
+				id: 'msg-6',
+				role: 'unknown',
+				text: '',
+				createdAt: undefined,
+				threadId: undefined,
+				resourceId: undefined,
+			},
+		]);
+	});
+
 	it('handles empty message lists', () => {
 		const out = mapMemoryMessagesToN8n({ operation: 'recall', messages: [] });
 		expect(out).toEqual([

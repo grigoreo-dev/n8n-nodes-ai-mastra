@@ -30,11 +30,13 @@ function textFromContent(content: unknown): string {
 
 function normalizeCreatedAt(value: unknown): string | undefined {
 	if (value instanceof Date) {
-		return Number.isFinite(value.getTime()) ? value.toISOString() : undefined;
+		const timestamp = value.getTime();
+		return Number.isFinite(timestamp) ? value.toISOString() : undefined;
 	}
 	if (typeof value === 'string') return value;
 	if (typeof value === 'number') {
-		return Number.isFinite(value) ? new Date(value).toISOString() : undefined;
+		const date = new Date(value);
+		return Number.isFinite(date.getTime()) ? date.toISOString() : undefined;
 	}
 	return undefined;
 }
