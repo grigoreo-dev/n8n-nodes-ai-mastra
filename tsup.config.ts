@@ -32,7 +32,7 @@ export default defineConfig(() => ({
 	},
 	outDir: 'dist',
 	format: ['cjs'],
-	target: 'node20',
+	target: 'node22',
 	platform: 'node',
 	// Narrow the watch to our TypeScript source dirs (see watchScope above).
 	// Otherwise tsup watches the whole cwd and rebuilds on unrelated changes
