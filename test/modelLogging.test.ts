@@ -146,3 +146,73 @@ describe('mapResultToN8n', () => {
 		});
 	});
 });
+
+async function drain(stream: ReadableStream): Promise<unknown[]> {
+	const reader = stream.getReader();
+	const chunks: unknown[] = [];
+	for (;;) {
+		const { done, value } = await reader.read();
+		if (done) break;
+		chunks.push(value);
+	}
+	return chunks;
+}
+
+function streamOf(parts: unknown[]): ReadableStream {
+	return new ReadableStream({
+		start(controller) {
+			for (const p of parts) controller.enqueue(p);
+			controller.close();
+		},
+	});
+}
+
+describe('wrapModelForLogging doStream', () => {
+	it('passes every chunk through unchanged and logs accumulated text + usage', async () => {
+		const { ctx, calls } = makeCtx();
+		const parts = [
+			{ type: 'text-delta', id: '1', delta: 'Hel' },
+			{ type: 'text-delta', id: '1', delta: 'lo' },
+			{ type: 'finish', finishReason: 'stop', usage: { inputTokens: 4, outputTokens: 2, totalTokens: 6 } },
+		];
+		const base = {
+			provider: 'p',
+			modelId: 'm',
+			specificationVersion: 'v2',
+			doGenerate: async () => ({}),
+			doStream: async (_o: unknown) => ({ stream: streamOf(parts), extra: 1 }),
+		};
+
+		const wrapped = wrapModelForLogging(base, ctx);
+		const { stream, extra } = (await wrapped.doStream({ prompt: [] })) as any;
+
+		// non-stream fields preserved
+		expect(extra).toBe(1);
+
+		const seen = await drain(stream);
+		expect(seen).toEqual(parts); // chunks unchanged
+
+		// input logged once, output logged once after close
+		expect(calls.input.length).toBe(1);
+		expect(calls.output.length).toBe(1);
+		const logged = (calls.output[0][2] as any)[0][0].json;
+		expect(logged.response.text).toBe('Hello');
+		expect(logged.response.finishReason).toBe('stop');
+		expect(logged.tokenUsage).toEqual({ promptTokens: 4, completionTokens: 2, totalTokens: 6 });
+	});
+
+	it('logs an error chunk and still forwards it', async () => {
+		const { ctx, calls } = makeCtx();
+		const err = { type: 'error', error: new Error('mid-stream') };
+		const base = {
+			provider: 'p', modelId: 'm', specificationVersion: 'v2',
+			doGenerate: async () => ({}),
+			doStream: async () => ({ stream: streamOf([{ type: 'text-delta', id: '1', delta: 'x' }, err]) }),
+		};
+		const wrapped = wrapModelForLogging(base, ctx);
+		const { stream } = (await wrapped.doStream({ prompt: [] })) as any;
+		const seen = await drain(stream);
+		expect(seen).toContainEqual(err);
+		expect(calls.output.length).toBe(1); // still logged something on close
+	});
+});

@@ -116,7 +116,47 @@ export function wrapModelForLogging<T extends Record<string, unknown>>(
 					}
 				};
 			}
-			// doStream handled in Task 3; everything else passes through.
+			if (prop === 'doStream') {
+				const original = target.doStream as (options: unknown) => Promise<Record<string, unknown>>;
+				return async (options: { prompt?: unknown }) => {
+					const index = safeAddInput(ctx, mapPromptToN8n(options ?? {}));
+					const original_result = await original.call(target, options);
+					const sourceStream = original_result.stream as ReadableStream;
+
+					let text = '';
+					let usage: { inputTokens?: number; outputTokens?: number; totalTokens?: number } | undefined;
+					let finishReason: unknown;
+
+					const passthrough = new ReadableStream({
+						async start(controller) {
+							const reader = sourceStream.getReader();
+							try {
+								for (;;) {
+									const { done, value } = await reader.read();
+									if (done) break;
+									const part = value as Record<string, unknown>;
+									if (part?.type === 'text-delta' && typeof part.delta === 'string') {
+										text += part.delta;
+									} else if (part?.type === 'finish') {
+										usage = part.usage as typeof usage;
+										finishReason = part.finishReason;
+									}
+									controller.enqueue(value);
+								}
+							} catch (error) {
+								safeAddOutput(ctx, index, error);
+								controller.error(error);
+								return;
+							}
+							controller.close();
+							safeAddOutput(ctx, index, mapResultToN8n({ text, finishReason, usage }));
+						},
+					});
+
+					return { ...original_result, stream: passthrough };
+				};
+			}
+			// everything else passes through.
 			return Reflect.get(target, prop, receiver);
 		},
 	});
