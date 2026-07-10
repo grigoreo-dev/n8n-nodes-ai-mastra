@@ -1,6 +1,71 @@
 import { describe, expect, it } from 'vitest';
 
 import { mapPromptToN8n, mapResultToN8n } from '../nodes/shared/modelLogging';
+import { AI_LANGUAGE_MODEL_CONNECTION, wrapModelForLogging } from '../nodes/shared/modelLogging';
+
+function makeCtx() {
+	const calls: { input: unknown[]; output: unknown[] } = { input: [], output: [] };
+	const ctx = {
+		addInputData: (type: string, data: unknown) => {
+			calls.input.push([type, data]);
+			return { index: 0 };
+		},
+		addOutputData: (type: string, index: number, data: unknown) => {
+			calls.output.push([type, index, data]);
+		},
+	};
+	return { ctx, calls };
+}
+
+describe('wrapModelForLogging doGenerate', () => {
+	it('logs input then output and returns the original result', async () => {
+		const { ctx, calls } = makeCtx();
+		const result = { text: 'answer', finishReason: 'stop', usage: { inputTokens: 1, outputTokens: 2, totalTokens: 3 } };
+		const base = {
+			provider: 'p',
+			modelId: 'm',
+			specificationVersion: 'v2',
+			doGenerate: async (_o: unknown) => result,
+			doStream: async () => ({ stream: new ReadableStream() }),
+		};
+
+		const wrapped = wrapModelForLogging(base, ctx);
+		const out = await wrapped.doGenerate({ prompt: [{ role: 'user', content: [{ type: 'text', text: 'hi' }] }] });
+
+		expect(out).toBe(result);
+		expect(calls.input[0][0]).toBe(AI_LANGUAGE_MODEL_CONNECTION);
+		expect(calls.output[0][0]).toBe(AI_LANGUAGE_MODEL_CONNECTION);
+		expect((calls.output[0][2] as any)[0][0].json.response.text).toBe('answer');
+	});
+
+	it('forwards non-intercepted members unchanged', () => {
+		const { ctx } = makeCtx();
+		const base = { provider: 'p', modelId: 'm', specificationVersion: 'v2', doGenerate: async () => ({}), doStream: async () => ({}) };
+		const wrapped = wrapModelForLogging(base, ctx);
+		expect(wrapped.provider).toBe('p');
+		expect(wrapped.modelId).toBe('m');
+		expect(wrapped.specificationVersion).toBe('v2');
+	});
+
+	it('logs the error and rethrows when doGenerate throws', async () => {
+		const { ctx, calls } = makeCtx();
+		const boom = new Error('llm failed');
+		const base = { provider: 'p', modelId: 'm', specificationVersion: 'v2', doGenerate: async () => { throw boom; }, doStream: async () => ({}) };
+		const wrapped = wrapModelForLogging(base, ctx);
+		await expect(wrapped.doGenerate({ prompt: [] })).rejects.toBe(boom);
+		expect(calls.output[0][2]).toBe(boom);
+	});
+
+	it('does not crash the call when the logger throws', async () => {
+		const badCtx = {
+			addInputData: () => { throw new Error('log boom'); },
+			addOutputData: () => { throw new Error('log boom'); },
+		};
+		const base = { provider: 'p', modelId: 'm', specificationVersion: 'v2', doGenerate: async () => ({ text: 'ok', finishReason: 'stop' }), doStream: async () => ({}) };
+		const wrapped = wrapModelForLogging(base, badCtx);
+		await expect(wrapped.doGenerate({ prompt: [] })).resolves.toEqual({ text: 'ok', finishReason: 'stop' });
+	});
+});
 
 describe('mapPromptToN8n', () => {
 	it('flattens messages to role + text', () => {
