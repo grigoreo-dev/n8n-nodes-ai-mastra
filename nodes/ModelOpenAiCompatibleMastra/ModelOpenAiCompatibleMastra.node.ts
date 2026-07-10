@@ -7,7 +7,10 @@ import {
 	type SupplyData,
 } from 'n8n-workflow';
 
+import { resolveModelConfig } from '@mastra/core/llm';
+
 import type { MastraModelHandoff } from '../shared/modelHandoff';
+import { wrapModelForLogging, type ModelLogContext } from '../shared/modelLogging';
 
 /**
  * Mastra Model sub-node (OpenAI-compatible).
@@ -102,7 +105,7 @@ export class ModelOpenAiCompatibleMastra implements INodeType {
 		// custom gateways need when the model name itself contains slashes
 		// (e.g. 'antigravity/gemini-3.5-flash-medium'). `providerId` is just an
 		// internal routing tag for Mastra's OpenAI-compatible provider.
-		const handoff: MastraModelHandoff = {
+		const handoff: Omit<MastraModelHandoff, 'model'> = {
 			__isMastraModel: true,
 			config: {
 				providerId: 'openai-compatible',
@@ -112,8 +115,18 @@ export class ModelOpenAiCompatibleMastra implements INodeType {
 			},
 		};
 
+		// Build the real LanguageModelV2 from our config, then wrap it so each
+		// LLM call logs prompt/response/usage onto this sub-node's
+		// ai_languageModel connection (making the Mastra Model node show up in
+		// the execution tree, like stock n8n chat-model nodes).
+		const resolved = await resolveModelConfig(handoff.config);
+		const wrappedModel = wrapModelForLogging(
+			resolved as unknown as Record<string, unknown>,
+			this as unknown as ModelLogContext,
+		);
+
 		return {
-			response: handoff,
+			response: { ...handoff, model: wrappedModel },
 		};
 	}
 }
