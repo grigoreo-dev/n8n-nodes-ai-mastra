@@ -274,6 +274,46 @@ describe('wrapModelForLogging doStream', () => {
 		const seen = await drain(stream);
 		expect(seen).toEqual(parts);
 	});
+
+	it('cancels the source and logs the partial result exactly once when the consumer cancels', async () => {
+		const { ctx, calls } = makeCtx();
+		let cancelReason: unknown;
+		const source = new ReadableStream({
+			start(controller) {
+				controller.enqueue({ type: 'text-delta', id: '1', delta: 'par' });
+				controller.enqueue({ type: 'text-delta', id: '1', delta: 'tial' });
+				// never closes — simulates an ongoing generation
+			},
+			cancel(reason) {
+				cancelReason = reason;
+			},
+		});
+		const base = {
+			provider: 'p',
+			modelId: 'm',
+			specificationVersion: 'v2',
+			doGenerate: async () => ({}),
+			doStream: async () => ({ stream: source }),
+		};
+
+		const wrapped = wrapModelForLogging(base, ctx);
+		const { stream } = (await wrapped.doStream({ prompt: [] })) as any;
+
+		const reader = stream.getReader();
+		expect((await reader.read()).value).toEqual({ type: 'text-delta', id: '1', delta: 'par' });
+		expect((await reader.read()).value).toEqual({ type: 'text-delta', id: '1', delta: 'tial' });
+		await reader.cancel('user abort');
+
+		// Let any in-flight pull settle before asserting.
+		await new Promise((resolve) => setTimeout(resolve, 0));
+
+		// Cancellation propagated upstream.
+		expect(cancelReason).toBe('user abort');
+		// Partial text logged exactly once, via the normal result mapping.
+		expect(calls.output.length).toBe(1);
+		const logged = (calls.output[0][2] as any)[0][0].json;
+		expect(logged.response.text).toBe('partial');
+	});
 });
 
 import { isMastraModelHandoff, type MastraModelHandoff } from '../nodes/shared/modelHandoff';

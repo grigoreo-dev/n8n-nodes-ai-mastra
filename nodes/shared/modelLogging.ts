@@ -140,6 +140,19 @@ export function wrapModelForLogging<T extends Record<string, unknown>>(
 						}
 					};
 
+					let logged = false;
+
+					/**
+					 * n8n pairs exactly one output with each input index, and the output
+					 * is now reachable from three terminal paths (done, source error,
+					 * consumer cancel) — log at most once.
+					 */
+					const logOutputOnce = (data: unknown) => {
+						if (logged) return;
+						logged = true;
+						safeAddOutput(ctx, index, data);
+					};
+
 					const passthrough = new ReadableStream({
 						// One source read per pull: the platform calls pull only when the
 						// consumer needs data, which is what provides back-pressure.
@@ -148,7 +161,7 @@ export function wrapModelForLogging<T extends Record<string, unknown>>(
 								const { done, value } = await reader.read();
 								if (done) {
 									controller.close();
-									safeAddOutput(ctx, index, mapResultToN8n({ text, finishReason, usage }));
+									logOutputOnce(mapResultToN8n({ text, finishReason, usage }));
 									releaseReader();
 									return;
 								}
@@ -161,8 +174,19 @@ export function wrapModelForLogging<T extends Record<string, unknown>>(
 								}
 								controller.enqueue(value);
 							} catch (error) {
-								safeAddOutput(ctx, index, error);
+								logOutputOnce(error);
 								controller.error(error);
+								releaseReader();
+							}
+						},
+						// The consumer gave up (e.g. the agent aborted generation):
+						// propagate cancellation upstream so the provider stops, and log
+						// whatever was accumulated so the run still shows in the tree.
+						async cancel(reason: unknown) {
+							logOutputOnce(mapResultToN8n({ text, finishReason, usage }));
+							try {
+								await reader.cancel(reason);
+							} finally {
 								releaseReader();
 							}
 						},
