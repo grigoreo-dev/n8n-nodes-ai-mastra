@@ -122,38 +122,48 @@ export function wrapModelForLogging<T extends Record<string, unknown>>(
 					const index = safeAddInput(ctx, mapPromptToN8n(options ?? {}));
 					const original_result = await original.call(target, options);
 					const sourceStream = original_result.stream as ReadableStream;
+					const reader = sourceStream.getReader();
 
 					let text = '';
 					let usage: { inputTokens?: number; outputTokens?: number; totalTokens?: number } | undefined;
 					let finishReason: unknown;
+					let released = false;
+
+					/** Release the source reader lock exactly once, on any terminal path. */
+					const releaseReader = () => {
+						if (released) return;
+						released = true;
+						try {
+							reader.releaseLock();
+						} catch {
+							// lock already gone — nothing to release
+						}
+					};
 
 					const passthrough = new ReadableStream({
-						async start(controller) {
-							const reader = sourceStream.getReader();
-							// Always release the source reader lock, on every terminal path.
+						// One source read per pull: the platform calls pull only when the
+						// consumer needs data, which is what provides back-pressure.
+						async pull(controller) {
 							try {
-								try {
-									for (;;) {
-										const { done, value } = await reader.read();
-										if (done) break;
-										const part = value as Record<string, unknown>;
-										if (part?.type === 'text-delta' && typeof part.delta === 'string') {
-											text += part.delta;
-										} else if (part?.type === 'finish') {
-											usage = part.usage as typeof usage;
-											finishReason = part.finishReason;
-										}
-										controller.enqueue(value);
-									}
-								} catch (error) {
-									safeAddOutput(ctx, index, error);
-									controller.error(error);
+								const { done, value } = await reader.read();
+								if (done) {
+									controller.close();
+									safeAddOutput(ctx, index, mapResultToN8n({ text, finishReason, usage }));
+									releaseReader();
 									return;
 								}
-								controller.close();
-								safeAddOutput(ctx, index, mapResultToN8n({ text, finishReason, usage }));
-							} finally {
-								reader.releaseLock();
+								const part = value as Record<string, unknown>;
+								if (part?.type === 'text-delta' && typeof part.delta === 'string') {
+									text += part.delta;
+								} else if (part?.type === 'finish') {
+									usage = part.usage as typeof usage;
+									finishReason = part.finishReason;
+								}
+								controller.enqueue(value);
+							} catch (error) {
+								safeAddOutput(ctx, index, error);
+								controller.error(error);
+								releaseReader();
 							}
 						},
 					});

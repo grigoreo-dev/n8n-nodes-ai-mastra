@@ -236,6 +236,44 @@ describe('wrapModelForLogging doStream', () => {
 		expect(calls.output.length).toBe(1);
 		expect((calls.output[0][2] as Error).message).toBe('stream boom');
 	});
+
+	it('does not drain the source ahead of the consumer (back-pressure)', async () => {
+		const { ctx } = makeCtx();
+		let sourcePulls = 0;
+		const parts = Array.from({ length: 10 }, (_, i) => ({
+			type: 'text-delta',
+			id: '1',
+			delta: String(i),
+		}));
+		let next = 0;
+		const source = new ReadableStream({
+			pull(controller) {
+				sourcePulls += 1;
+				if (next < parts.length) controller.enqueue(parts[next++]);
+				else controller.close();
+			},
+		});
+		const base = {
+			provider: 'p',
+			modelId: 'm',
+			specificationVersion: 'v2',
+			doGenerate: async () => ({}),
+			doStream: async () => ({ stream: source }),
+		};
+
+		const wrapped = wrapModelForLogging(base, ctx);
+		const { stream } = (await wrapped.doStream({ prompt: [] })) as any;
+
+		// Give an eager implementation time to drain the whole source.
+		await new Promise((resolve) => setTimeout(resolve, 20));
+
+		// Pull-based wrapper with the default high-water mark (1) may prefetch
+		// a chunk or two, but must not have drained all 10.
+		expect(sourcePulls).toBeLessThanOrEqual(3);
+
+		const seen = await drain(stream);
+		expect(seen).toEqual(parts);
+	});
 });
 
 import { isMastraModelHandoff, type MastraModelHandoff } from '../nodes/shared/modelHandoff';
