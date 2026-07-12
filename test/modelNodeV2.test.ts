@@ -136,6 +136,23 @@ describe('buildCustomHeaders', () => {
 		expect(warn).toHaveBeenCalledOnce();
 	});
 
+	it('skips prototype-polluting header names', () => {
+		const warn = vi.fn();
+		const result = buildCustomHeaders(
+			{
+				header: [
+					{ name: '__proto__', value: 'x' },
+					{ name: 'constructor', value: 'x' },
+					{ name: 'prototype', value: 'x' },
+					{ name: 'X-A', value: '1' },
+				],
+			},
+			warn,
+		);
+		expect(result).toEqual({ 'X-A': '1' });
+		expect(Object.keys(result!)).toEqual(['X-A']);
+	});
+
 	it('returns undefined for empty/missing rows and skips empty names', () => {
 		const warn = vi.fn();
 		expect(buildCustomHeaders(undefined, warn)).toBeUndefined();

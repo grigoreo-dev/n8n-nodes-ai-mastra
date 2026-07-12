@@ -59,6 +59,8 @@ export function buildCustomHeaders(
 	for (const row of rows) {
 		const name = row.name?.trim();
 		if (!name) continue;
+		// Never use prototype-polluting names as computed object keys (security guidance).
+		if (['__proto__', 'constructor', 'prototype'].includes(name.toLowerCase())) continue;
 		if (name.toLowerCase() === 'authorization') {
 			warn(
 				'Custom header "Authorization" is ignored — that header is managed by the credential.',
