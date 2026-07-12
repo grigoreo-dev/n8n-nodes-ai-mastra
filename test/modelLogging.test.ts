@@ -275,6 +275,42 @@ describe('wrapModelForLogging doStream', () => {
 		expect(seen).toEqual(parts);
 	});
 
+	it('releases the source lock even while the upstream cancel is still pending', async () => {
+		const { ctx } = makeCtx();
+		let resolveUpstreamCancel!: () => void;
+		const source = new ReadableStream({
+			start(controller) {
+				controller.enqueue({ type: 'text-delta', id: '1', delta: 'x' });
+			},
+			cancel() {
+				// Simulates an upstream whose cancellation takes a while (or hangs).
+				return new Promise<void>((resolve) => {
+					resolveUpstreamCancel = resolve;
+				});
+			},
+		});
+		const base = {
+			provider: 'p',
+			modelId: 'm',
+			specificationVersion: 'v2',
+			doGenerate: async () => ({}),
+			doStream: async () => ({ stream: source }),
+		};
+
+		const wrapped = wrapModelForLogging(base, ctx);
+		const { stream } = (await wrapped.doStream({ prompt: [] })) as any;
+
+		const cancelled = stream.cancel('user abort');
+		// Let the wrapper's cancel handler run up to its await point.
+		await new Promise((resolve) => setTimeout(resolve, 0));
+
+		// The lock must not be held hostage by a slow/hung upstream cancel.
+		expect(source.locked).toBe(false);
+
+		resolveUpstreamCancel();
+		await cancelled;
+	});
+
 	it('cancels the source and logs the partial result exactly once when the consumer cancels', async () => {
 		const { ctx, calls } = makeCtx();
 		let cancelReason: unknown;

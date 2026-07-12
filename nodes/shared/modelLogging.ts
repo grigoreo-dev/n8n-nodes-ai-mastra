@@ -184,11 +184,12 @@ export function wrapModelForLogging<T extends Record<string, unknown>>(
 						// whatever was accumulated so the run still shows in the tree.
 						async cancel(reason: unknown) {
 							logOutputOnce(mapResultToN8n({ text, finishReason, usage }));
-							try {
-								await reader.cancel(reason);
-							} finally {
-								releaseReader();
-							}
+							// Start upstream cancellation, then release the lock right away
+							// so a slow (or hung) upstream cancel cannot keep the source
+							// locked; await afterwards to surface upstream failures.
+							const upstreamCancelled = reader.cancel(reason);
+							releaseReader();
+							await upstreamCancelled;
 						},
 					});
 

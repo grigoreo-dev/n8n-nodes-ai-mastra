@@ -58,7 +58,7 @@ All per-call state lives in a closure created per `doStream` invocation:
 
 ### Helpers (closure-scoped)
 
-```
+```text
 releaseReader():
   if released → return
   released = true
@@ -76,7 +76,7 @@ one output per input index.
 
 ### `pull(controller)`
 
-```
+```text
 try:
   { done, value } = await reader.read()      // exactly one read per pull
   if done:
@@ -98,16 +98,17 @@ which is what provides back-pressure. Chunks pass through unchanged.
 
 ### `cancel(reason)`
 
-```
+```text
 logOutputOnce(mapResultToN8n({ text, finishReason, usage }))  // partial result
-try:
-  await reader.cancel(reason)                 // propagate cancellation upstream
-finally:
-  releaseReader()
+upstreamCancelled = reader.cancel(reason)     // propagate cancellation upstream
+releaseReader()                               // do not wait for upstream
+await upstreamCancelled                       // surface upstream failures
 ```
 
 Rationale: cancelling downstream must cancel the provider stream (no leak), and
-the partially generated text still lands in the execution tree.
+the partially generated text still lands in the execution tree. The lock is
+released immediately after starting the upstream cancellation — not after it
+settles — so a slow or hung upstream `cancel()` cannot keep the source locked.
 
 ### Observable behaviour (must stay 1:1 with current code)
 
