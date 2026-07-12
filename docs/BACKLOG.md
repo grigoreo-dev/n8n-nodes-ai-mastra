@@ -1,6 +1,32 @@
 # Backlog
 
-Future work, not yet scheduled.
+Future work, not yet scheduled. Scheduled work lives in
+[ROADMAP.md](./ROADMAP.md).
+
+## Streaming
+
+Stream agent output token-by-token into n8n. Nice to have, explicitly not a
+priority right now.
+
+## SSH sandbox / remote workspace adapters
+
+Custom `MastraSandbox` executing commands in a remote container over SSH
+(`ssh2`), plus an SFTP-backed `MastraFilesystem`. Only needed if, after the
+ACP node ships, we still want our own agent to run raw commands on the worker
+pod (ACP already covers "delegate the coding task there"). Cloud filesystem
+adapters (S3/R2, GCS, Azure Blob — separate `@mastra/*` packages) also live
+here until someone needs them.
+
+## Supervisor / sub-agents
+
+Expose Mastra's `agents:` map (e.g. `AcpAgent` as a delegatable sub-agent, or
+Mastra-native sub-agents) on the agent node. Multi-agent orchestration is its
+own design conversation.
+
+## Mastra Tool omni-node
+
+A sub-node where the user writes custom tool code inline. Probably redundant
+next to n8n's stock Code Tool + MCP; revisit only if a concrete need appears.
 
 ## End-to-end workflow tests inside a real n8n (needs research)
 
