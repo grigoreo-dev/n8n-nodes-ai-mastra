@@ -236,6 +236,120 @@ describe('wrapModelForLogging doStream', () => {
 		expect(calls.output.length).toBe(1);
 		expect((calls.output[0][2] as Error).message).toBe('stream boom');
 	});
+
+	it('does not drain the source ahead of the consumer (back-pressure)', async () => {
+		const { ctx } = makeCtx();
+		let sourcePulls = 0;
+		const parts = Array.from({ length: 10 }, (_, i) => ({
+			type: 'text-delta',
+			id: '1',
+			delta: String(i),
+		}));
+		let next = 0;
+		const source = new ReadableStream({
+			pull(controller) {
+				sourcePulls += 1;
+				if (next < parts.length) controller.enqueue(parts[next++]);
+				else controller.close();
+			},
+		});
+		const base = {
+			provider: 'p',
+			modelId: 'm',
+			specificationVersion: 'v2',
+			doGenerate: async () => ({}),
+			doStream: async () => ({ stream: source }),
+		};
+
+		const wrapped = wrapModelForLogging(base, ctx);
+		const { stream } = (await wrapped.doStream({ prompt: [] })) as any;
+
+		// Give an eager implementation time to drain the whole source.
+		await new Promise((resolve) => setTimeout(resolve, 20));
+
+		// Pull-based wrapper with the default high-water mark (1) may prefetch
+		// a chunk or two, but must not have drained all 10.
+		expect(sourcePulls).toBeLessThanOrEqual(3);
+
+		const seen = await drain(stream);
+		expect(seen).toEqual(parts);
+	});
+
+	it('releases the source lock even while the upstream cancel is still pending', async () => {
+		const { ctx } = makeCtx();
+		let resolveUpstreamCancel!: () => void;
+		const source = new ReadableStream({
+			start(controller) {
+				controller.enqueue({ type: 'text-delta', id: '1', delta: 'x' });
+			},
+			cancel() {
+				// Simulates an upstream whose cancellation takes a while (or hangs).
+				return new Promise<void>((resolve) => {
+					resolveUpstreamCancel = resolve;
+				});
+			},
+		});
+		const base = {
+			provider: 'p',
+			modelId: 'm',
+			specificationVersion: 'v2',
+			doGenerate: async () => ({}),
+			doStream: async () => ({ stream: source }),
+		};
+
+		const wrapped = wrapModelForLogging(base, ctx);
+		const { stream } = (await wrapped.doStream({ prompt: [] })) as any;
+
+		const cancelled = stream.cancel('user abort');
+		// Let the wrapper's cancel handler run up to its await point.
+		await new Promise((resolve) => setTimeout(resolve, 0));
+
+		// The lock must not be held hostage by a slow/hung upstream cancel.
+		expect(source.locked).toBe(false);
+
+		resolveUpstreamCancel();
+		await cancelled;
+	});
+
+	it('cancels the source and logs the partial result exactly once when the consumer cancels', async () => {
+		const { ctx, calls } = makeCtx();
+		let cancelReason: unknown;
+		const source = new ReadableStream({
+			start(controller) {
+				controller.enqueue({ type: 'text-delta', id: '1', delta: 'par' });
+				controller.enqueue({ type: 'text-delta', id: '1', delta: 'tial' });
+				// never closes — simulates an ongoing generation
+			},
+			cancel(reason) {
+				cancelReason = reason;
+			},
+		});
+		const base = {
+			provider: 'p',
+			modelId: 'm',
+			specificationVersion: 'v2',
+			doGenerate: async () => ({}),
+			doStream: async () => ({ stream: source }),
+		};
+
+		const wrapped = wrapModelForLogging(base, ctx);
+		const { stream } = (await wrapped.doStream({ prompt: [] })) as any;
+
+		const reader = stream.getReader();
+		expect((await reader.read()).value).toEqual({ type: 'text-delta', id: '1', delta: 'par' });
+		expect((await reader.read()).value).toEqual({ type: 'text-delta', id: '1', delta: 'tial' });
+		await reader.cancel('user abort');
+
+		// Let any in-flight pull settle before asserting.
+		await new Promise((resolve) => setTimeout(resolve, 0));
+
+		// Cancellation propagated upstream.
+		expect(cancelReason).toBe('user abort');
+		// Partial text logged exactly once, via the normal result mapping.
+		expect(calls.output.length).toBe(1);
+		const logged = (calls.output[0][2] as any)[0][0].json;
+		expect(logged.response.text).toBe('partial');
+	});
 });
 
 import { isMastraModelHandoff, type MastraModelHandoff } from '../nodes/shared/modelHandoff';
