@@ -1,5 +1,7 @@
 import type { OpenAICompatibleConfig } from '@mastra/core/llm';
 
+import type { MastraModelSettings } from './modelSettings';
+
 /**
  * The object a Mastra model sub-node returns as its `ai_languageModel`
  * `response`.
@@ -28,6 +30,13 @@ export interface MastraModelHandoff {
 	 * `new Agent({ model })`. `config` is retained for diagnostics.
 	 */
 	model: unknown;
+	/**
+	 * Model call settings (temperature, reasoning, …) configured on the model
+	 * sub-node. The Agent node forwards them to
+	 * `agent.stream(prompt, { modelSettings })`; absent when the user set no
+	 * options.
+	 */
+	settings?: MastraModelSettings;
 }
 
 export function isMastraModelHandoff(value: unknown): value is MastraModelHandoff {
