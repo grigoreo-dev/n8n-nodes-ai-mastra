@@ -9,7 +9,7 @@ import {
 import type { Agent as AgentType } from '@mastra/core/agent';
 
 import { isMastraMemoryHandoff } from '../shared/memoryHandoff';
-import { isMastraModelHandoff } from '../shared/modelHandoff';
+import { isMastraModelHandoff, type MastraModelHandoff } from '../shared/modelHandoff';
 import { toMastraToolSet } from '../shared/toolBridge';
 
 /**
@@ -204,7 +204,14 @@ export class MastraAgent implements INodeType {
 
 				const agent = new Agent(agentConfig);
 
-				const stream = await agent.stream(prompt, memoryScope ? { memory: memoryScope } : {});
+				const streamOptions: {
+					memory?: { thread: string; resource: string };
+					modelSettings?: NonNullable<MastraModelHandoff['settings']>;
+				} = {};
+				if (memoryScope) streamOptions.memory = memoryScope;
+				if (connectedModel.settings) streamOptions.modelSettings = connectedModel.settings;
+
+				const stream = await agent.stream(prompt, streamOptions);
 				const text = await stream.text;
 
 				returnData.push({
