@@ -191,6 +191,61 @@ describe('MastraAgent.execute model settings', () => {
 		expect(options).toMatchObject({ modelSettings: { temperature: 0.3, reasoning: 'low' } });
 	});
 
+	it('forwards reasoning to providerOptions for the openai-compatible provider', async () => {
+		// In @mastra/core 1.49.0 spec-v2 models ignore modelSettings.reasoning;
+		// only providerOptions['openai-compatible'].reasoningEffort reaches the
+		// wire (as reasoning_effort). Both must be sent.
+		mastraAgentMock.createdConfigs.length = 0;
+		mastraAgentMock.streamCalls.length = 0;
+		mastraAgentMock.streamResults = [{ text: Promise.resolve('ok') }];
+		const ctx = makeExecuteCtx({
+			[NodeConnectionTypes.AiLanguageModel]: {
+				__isMastraModel: true,
+				config: {
+					providerId: 'openai-compatible',
+					modelId: 'test-model',
+					url: 'https://example.test',
+					apiKey: 'secret',
+				},
+				settings: { reasoning: 'low' },
+			},
+		});
+
+		await new MastraAgent().execute.call(ctx);
+
+		expect(mastraAgentMock.streamCalls).toHaveLength(1);
+		const options = mastraAgentMock.streamCalls[0][1] as Record<string, unknown>;
+		expect(options).toMatchObject({
+			modelSettings: { reasoning: 'low' },
+			providerOptions: { 'openai-compatible': { reasoningEffort: 'low' } },
+		});
+	});
+
+	it('omits providerOptions when settings have no reasoning', async () => {
+		mastraAgentMock.createdConfigs.length = 0;
+		mastraAgentMock.streamCalls.length = 0;
+		mastraAgentMock.streamResults = [{ text: Promise.resolve('ok') }];
+		const ctx = makeExecuteCtx({
+			[NodeConnectionTypes.AiLanguageModel]: {
+				__isMastraModel: true,
+				config: {
+					providerId: 'openai-compatible',
+					modelId: 'test-model',
+					url: 'https://example.test',
+					apiKey: 'secret',
+				},
+				settings: { temperature: 0.5 },
+			},
+		});
+
+		await new MastraAgent().execute.call(ctx);
+
+		expect(mastraAgentMock.streamCalls).toHaveLength(1);
+		const options = mastraAgentMock.streamCalls[0][1] as Record<string, unknown>;
+		expect(options).toMatchObject({ modelSettings: { temperature: 0.5 } });
+		expect(Object.keys(options)).not.toContain('providerOptions');
+	});
+
 	it('omits modelSettings when the handoff has no settings', async () => {
 		mastraAgentMock.createdConfigs.length = 0;
 		mastraAgentMock.streamCalls.length = 0;
