@@ -1,6 +1,6 @@
 // test/modelNodeV2.test.ts
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import type { ILoadOptionsFunctions } from 'n8n-workflow';
+import type { ILoadOptionsFunctions, ISupplyDataFunctions } from 'n8n-workflow';
 
 vi.mock('@mastra/core/llm', () => ({
 	resolveModelConfig: vi.fn(async (config: unknown) => ({ mockModel: true, config })),
@@ -8,9 +8,11 @@ vi.mock('@mastra/core/llm', () => ({
 
 import {
 	ModelOpenAiCompatibleMastra,
+	buildCustomHeaders,
 	resolveModelValue,
 } from '../nodes/ModelOpenAiCompatibleMastra/ModelOpenAiCompatibleMastra.node';
 import { clearModelCatalogCache } from '../nodes/shared/modelCatalog';
+import type { MastraModelHandoff } from '../nodes/shared/modelHandoff';
 
 const OPENROUTER_BODY = {
 	data: [
@@ -111,5 +113,194 @@ describe('listSearch.searchModels', () => {
 		await expect(
 			node.methods!.listSearch!.searchModels.call(loadOptionsContext()),
 		).rejects.toThrow(/By ID/);
+	});
+});
+
+describe('buildCustomHeaders', () => {
+	it('builds a record from fixedCollection rows', () => {
+		const warn = vi.fn();
+		expect(
+			buildCustomHeaders({ header: [{ name: 'X-Session-Id', value: 'abc' }] }, warn),
+		).toEqual({ 'X-Session-Id': 'abc' });
+		expect(warn).not.toHaveBeenCalled();
+	});
+
+	it('drops Authorization case-insensitively with a warning', () => {
+		const warn = vi.fn();
+		expect(
+			buildCustomHeaders(
+				{ header: [{ name: 'authorization', value: 'Bearer hack' }, { name: 'X-A', value: '1' }] },
+				warn,
+			),
+		).toEqual({ 'X-A': '1' });
+		expect(warn).toHaveBeenCalledOnce();
+	});
+
+	it('returns undefined for empty/missing rows and skips empty names', () => {
+		const warn = vi.fn();
+		expect(buildCustomHeaders(undefined, warn)).toBeUndefined();
+		expect(buildCustomHeaders({ header: [] }, warn)).toBeUndefined();
+		expect(buildCustomHeaders({ header: [{ name: '', value: 'x' }] }, warn)).toBeUndefined();
+	});
+});
+
+describe('supplyData v2', () => {
+	const fetchMock = vi.fn();
+
+	function supplyContext(params: Record<string, unknown>, typeVersion = 2): ISupplyDataFunctions {
+		return {
+			getCredentials: vi.fn(async () => ({
+				baseUrl: 'https://openrouter.ai/api/v1',
+				apiKey: 'sk-test',
+			})),
+			getNodeParameter: vi.fn((name: string, _i: number, fallback?: unknown) =>
+				name in params ? params[name] : fallback,
+			),
+			getNode: vi.fn(() => ({ name: 'Mastra Model', typeVersion })),
+			logger: { warn: vi.fn() },
+		} as unknown as ISupplyDataFunctions;
+	}
+
+	beforeEach(() => {
+		vi.stubGlobal('fetch', fetchMock);
+		fetchMock.mockReset();
+		clearModelCatalogCache();
+	});
+
+	it('populates settings and headers on the handoff', async () => {
+		fetchMock.mockResolvedValue({ ok: true, json: async () => OPENROUTER_BODY } as Response);
+		const node = new ModelOpenAiCompatibleMastra();
+		const ctx = supplyContext({
+			model: { mode: 'list', value: 'openai/gpt-4o-mini' },
+			options: { temperature: 0.3 },
+			customHeaders: { header: [{ name: 'X-Session-Id', value: 's-1' }] },
+		});
+
+		const { response } = await node.supplyData.call(ctx, 0);
+		const handoff = response as MastraModelHandoff;
+
+		expect(handoff.settings).toEqual({ temperature: 0.3 });
+		expect((handoff.config as { headers?: Record<string, string> }).headers).toEqual({
+			'X-Session-Id': 's-1',
+		});
+		expect((handoff.config as { modelId?: string }).modelId).toBe('openai/gpt-4o-mini');
+	});
+
+	it('omits settings and headers when nothing is configured', async () => {
+		fetchMock.mockResolvedValue({ ok: true, json: async () => OPENROUTER_BODY } as Response);
+		const node = new ModelOpenAiCompatibleMastra();
+		const ctx = supplyContext({ model: { mode: 'id', value: 'openai/gpt-4o-mini' } });
+
+		const { response } = await node.supplyData.call(ctx, 0);
+		const handoff = response as MastraModelHandoff;
+
+		expect(handoff.settings).toBeUndefined();
+		expect((handoff.config as { headers?: unknown }).headers).toBeUndefined();
+	});
+
+	it('rejects options the model does not support (per catalog)', async () => {
+		// gpt-4o-mini advertises no 'reasoning' in OPENROUTER_BODY's supported_parameters
+		fetchMock.mockResolvedValue({
+			ok: true,
+			json: async () => ({
+				data: [
+					{
+						id: 'openai/gpt-4o-mini',
+						supported_parameters: ['temperature', 'top_p', 'max_tokens'],
+					},
+				],
+			}),
+		} as Response);
+		const node = new ModelOpenAiCompatibleMastra();
+		const ctx = supplyContext({
+			model: { mode: 'id', value: 'openai/gpt-4o-mini' },
+			options: { reasoningEffort: 'high' },
+		});
+
+		await expect(node.supplyData.call(ctx, 0)).rejects.toThrow(/Reasoning Effort/);
+	});
+
+	it('skips validation when the endpoint has no catalog', async () => {
+		fetchMock.mockResolvedValue({ ok: false, status: 404 } as Response);
+		const node = new ModelOpenAiCompatibleMastra();
+		const ctx = supplyContext({
+			model: { mode: 'id', value: 'anything/goes' },
+			options: { reasoningEffort: 'high' },
+		});
+
+		const { response } = await node.supplyData.call(ctx, 0);
+		expect((response as MastraModelHandoff).settings).toEqual({ reasoning: 'high' });
+	});
+
+	it('keeps v1 behavior for typeVersion 1 (plain string, no options params)', async () => {
+		const node = new ModelOpenAiCompatibleMastra();
+		const ctx = supplyContext({ model: 'openai/gpt-4o-mini' }, 1);
+
+		const { response } = await node.supplyData.call(ctx, 0);
+		const handoff = response as MastraModelHandoff;
+
+		expect((handoff.config as { modelId?: string }).modelId).toBe('openai/gpt-4o-mini');
+		expect(handoff.settings).toBeUndefined();
+		expect(fetchMock).not.toHaveBeenCalled();
+	});
+});
+
+describe('loadOptions.getReasoningEfforts', () => {
+	const fetchMock = vi.fn();
+
+	beforeEach(() => {
+		vi.stubGlobal('fetch', fetchMock);
+		fetchMock.mockReset();
+		clearModelCatalogCache();
+	});
+
+	function ctx(model: unknown): ILoadOptionsFunctions {
+		return {
+			getCredentials: vi.fn(async () => ({
+				baseUrl: 'https://openrouter.ai/api/v1',
+				apiKey: 'sk-test',
+			})),
+			getCurrentNodeParameter: vi.fn(() => model),
+			getNode: vi.fn(() => ({ name: 'Mastra Model' })),
+		} as unknown as ILoadOptionsFunctions;
+	}
+
+	it('returns all levels when the model supports reasoning', async () => {
+		fetchMock.mockResolvedValue({
+			ok: true,
+			json: async () => ({
+				data: [{ id: 'openai/o3', supported_parameters: ['reasoning'] }],
+			}),
+		} as Response);
+		const node = new ModelOpenAiCompatibleMastra();
+		const options = await node.methods!.loadOptions!.getReasoningEfforts.call(
+			ctx({ mode: 'list', value: 'openai/o3' }),
+		);
+		expect(options.map((o) => o.value)).toEqual(['minimal', 'low', 'medium', 'high']);
+	});
+
+	it('returns an empty list with a hint when the model does not support reasoning', async () => {
+		fetchMock.mockResolvedValue({
+			ok: true,
+			json: async () => ({
+				data: [{ id: 'openai/gpt-4o-mini', supported_parameters: ['temperature'] }],
+			}),
+		} as Response);
+		const node = new ModelOpenAiCompatibleMastra();
+		const options = await node.methods!.loadOptions!.getReasoningEfforts.call(
+			ctx({ mode: 'list', value: 'openai/gpt-4o-mini' }),
+		);
+		expect(options).toHaveLength(1);
+		expect(options[0].value).toBe('');
+		expect(options[0].name).toMatch(/not.*support/i);
+	});
+
+	it('returns all levels when the catalog is unavailable or the model unknown', async () => {
+		fetchMock.mockResolvedValue({ ok: false, status: 404 } as Response);
+		const node = new ModelOpenAiCompatibleMastra();
+		const options = await node.methods!.loadOptions!.getReasoningEfforts.call(
+			ctx({ mode: 'id', value: 'whatever' }),
+		);
+		expect(options.map((o) => o.value)).toEqual(['minimal', 'low', 'medium', 'high']);
 	});
 });

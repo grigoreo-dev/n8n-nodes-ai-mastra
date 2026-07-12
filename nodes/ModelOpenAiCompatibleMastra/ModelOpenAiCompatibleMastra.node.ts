@@ -3,6 +3,7 @@ import {
 	NodeOperationError,
 	type ILoadOptionsFunctions,
 	type INodeListSearchResult,
+	type INodePropertyOptions,
 	type ISupplyDataFunctions,
 	type INodeType,
 	type INodeTypeDescription,
@@ -11,9 +12,14 @@ import {
 
 import { resolveModelConfig } from '@mastra/core/llm';
 
-import { getModelCatalog, type CatalogModel } from '../shared/modelCatalog';
+import { findModel, getModelCatalog, type CatalogModel } from '../shared/modelCatalog';
 import type { MastraModelHandoff } from '../shared/modelHandoff';
 import { wrapModelForLogging, type ModelLogContext } from '../shared/modelLogging';
+import {
+	buildModelSettings,
+	findUnsupportedOptions,
+	type ModelNodeOptions,
+} from '../shared/modelSettings';
 
 /**
  * Read the model id off either node version: v1 stores a plain string, v2 a
@@ -36,6 +42,40 @@ function describeModel(model: CatalogModel): string {
 	if (model.pricing?.completion) parts.push(`$${model.pricing.completion}/out`);
 	return parts.join(' · ');
 }
+
+/**
+ * Turn the customHeaders fixedCollection value into a plain header record.
+ * `Authorization` is silently owned by the credential: a user-supplied value
+ * is dropped with a warning instead of overriding the Bearer token.
+ */
+export function buildCustomHeaders(
+	raw: unknown,
+	warn: (message: string) => void,
+): Record<string, string> | undefined {
+	const rows = (raw as { header?: Array<{ name?: string; value?: string }> } | undefined)?.header;
+	if (!Array.isArray(rows) || rows.length === 0) return undefined;
+
+	const headers: Record<string, string> = {};
+	for (const row of rows) {
+		const name = row.name?.trim();
+		if (!name) continue;
+		if (name.toLowerCase() === 'authorization') {
+			warn(
+				'Custom header "Authorization" is ignored — that header is managed by the credential.',
+			);
+			continue;
+		}
+		headers[name] = row.value ?? '';
+	}
+	return Object.keys(headers).length > 0 ? headers : undefined;
+}
+
+const REASONING_OPTIONS: INodePropertyOptions[] = [
+	{ name: 'Minimal', value: 'minimal' },
+	{ name: 'Low', value: 'low' },
+	{ name: 'Medium', value: 'medium' },
+	{ name: 'High', value: 'high' },
+];
 
 /**
  * Mastra Model sub-node (OpenAI-compatible).
@@ -128,6 +168,108 @@ export class ModelOpenAiCompatibleMastra implements INodeType {
 					},
 				],
 			},
+			{
+				displayName: 'Options',
+				name: 'options',
+				type: 'collection',
+				placeholder: 'Add Option',
+				default: {},
+				displayOptions: { show: { '@version': [2] } },
+				options: [
+					{
+						displayName: 'Frequency Penalty',
+						name: 'frequencyPenalty',
+						type: 'number',
+						default: 0,
+						typeOptions: { minValue: -2, maxValue: 2, numberPrecision: 2 },
+						description: 'Penalizes tokens proportionally to their existing frequency',
+					},
+					{
+						displayName: 'Max Output Tokens',
+						name: 'maxOutputTokens',
+						type: 'number',
+						default: 1024,
+						typeOptions: { minValue: 1 },
+						description: 'Upper bound on the number of tokens the model may generate',
+					},
+					{
+						displayName: 'Presence Penalty',
+						name: 'presencePenalty',
+						type: 'number',
+						default: 0,
+						typeOptions: { minValue: -2, maxValue: 2, numberPrecision: 2 },
+						description: 'Penalizes tokens that already appeared at all',
+					},
+					{
+						displayName: 'Reasoning Effort',
+						name: 'reasoningEffort',
+						type: 'options',
+						default: 'medium',
+						typeOptions: {
+							loadOptionsMethod: 'getReasoningEfforts',
+							loadOptionsDependsOn: ['model.value'],
+						},
+						description:
+							'How much reasoning the model performs before answering. The list reflects what the selected model supports (when the endpoint advertises it).',
+					},
+					{
+						displayName: 'Stop Sequences',
+						name: 'stopSequences',
+						type: 'string',
+						default: '',
+						placeholder: 'END,STOP',
+						description: 'Comma-separated sequences that stop generation',
+					},
+					{
+						displayName: 'Temperature',
+						name: 'temperature',
+						type: 'number',
+						default: 1,
+						typeOptions: { minValue: 0, maxValue: 2, numberPrecision: 2 },
+						description: 'Sampling temperature; higher is more random',
+					},
+					{
+						displayName: 'Top P',
+						name: 'topP',
+						type: 'number',
+						default: 1,
+						typeOptions: { minValue: 0, maxValue: 1, numberPrecision: 2 },
+						description: 'Nucleus-sampling probability mass',
+					},
+				],
+			},
+			{
+				displayName: 'Custom Headers',
+				name: 'customHeaders',
+				type: 'fixedCollection',
+				default: {},
+				typeOptions: { multipleValues: true },
+				displayOptions: { show: { '@version': [2] } },
+				description:
+					'Extra HTTP headers sent with every model request, e.g. an OpenRouter session id. Values support expressions. The Authorization header is managed by the credential and cannot be overridden here.',
+				options: [
+					{
+						displayName: 'Header',
+						name: 'header',
+						values: [
+							{
+								displayName: 'Name',
+								name: 'name',
+								type: 'string',
+								default: '',
+								placeholder: 'X-Session-Id',
+							},
+							{
+								displayName: 'Value',
+								name: 'value',
+								type: 'string',
+								default: '',
+								placeholder: '={{ $json.sessionId }}',
+							},
+						],
+					},
+				],
+			},
 		],
 	};
 
@@ -167,6 +309,30 @@ export class ModelOpenAiCompatibleMastra implements INodeType {
 				return { results };
 			},
 		},
+		loadOptions: {
+			async getReasoningEfforts(this: ILoadOptionsFunctions): Promise<INodePropertyOptions[]> {
+				const credentials = (await this.getCredentials('mastraOpenAiCompatibleApi')) as {
+					baseUrl?: string;
+					apiKey?: string;
+				};
+				const modelId = resolveModelValue(this.getCurrentNodeParameter('model'));
+				const catalog = await getModelCatalog(
+					credentials.baseUrl?.trim() ?? '',
+					credentials.apiKey?.trim() ?? '',
+				);
+				const model = findModel(catalog, modelId);
+				// Only restrict when the endpoint explicitly advertises capabilities.
+				if (model?.supportedParameters && !model.supportedParameters.includes('reasoning')) {
+					return [
+						{
+							name: 'This model does not support reasoning effort',
+							value: '',
+						},
+					];
+				}
+				return REASONING_OPTIONS;
+			},
+		},
 	};
 
 	async supplyData(this: ISupplyDataFunctions, itemIndex: number): Promise<SupplyData> {
@@ -193,6 +359,38 @@ export class ModelOpenAiCompatibleMastra implements INodeType {
 			});
 		}
 
+		const isV2 = this.getNode().typeVersion >= 2;
+
+		// v2-only: model options and custom headers.
+		let settings: MastraModelHandoff['settings'];
+		let headers: Record<string, string> | undefined;
+		if (isV2) {
+			const rawOptions = this.getNodeParameter('options', itemIndex, {}) as ModelNodeOptions;
+			settings = buildModelSettings(rawOptions);
+			headers = buildCustomHeaders(
+				this.getNodeParameter('customHeaders', itemIndex, {}),
+				(message) => this.logger.warn(message),
+			);
+
+			// Soft validation against the endpoint's advertised capabilities.
+			// No catalog / no supported_parameters → skip silently.
+			if (settings) {
+				const catalog = await getModelCatalog(url, apiKey);
+				const unsupported = findUnsupportedOptions(findModel(catalog, model), settings);
+				if (unsupported.length > 0) {
+					throw new NodeOperationError(
+						this.getNode(),
+						`Model ${model} does not support: ${unsupported.join(', ')}`,
+						{
+							description:
+								'The endpoint reports these parameters as unsupported for this model (supported_parameters). Remove them from Options or pick a different model.',
+							itemIndex,
+						},
+					);
+				}
+			}
+		}
+
 		// Mastra's OpenAICompatibleConfig `{ providerId, modelId }` form. Unlike the
 		// `{ id: 'a/b' }` form (which Mastra SPLITS on the first '/' — sending only
 		// 'b' as the model), `modelId` is sent to the endpoint VERBATIM. That's what
@@ -206,7 +404,9 @@ export class ModelOpenAiCompatibleMastra implements INodeType {
 				modelId: model,
 				url,
 				apiKey,
+				...(headers ? { headers } : {}),
 			},
+			...(settings ? { settings } : {}),
 		};
 
 		// Build the real LanguageModelV2 from our config, then wrap it so each
