@@ -1,6 +1,51 @@
 # Backlog
 
-Future work, not yet scheduled.
+Future work, not yet scheduled. Scheduled work lives in
+[ROADMAP.md](./ROADMAP.md).
+
+## Streaming
+
+Stream agent output token-by-token into n8n. Nice to have, explicitly not a
+priority right now.
+
+## Reasoning capture and `<think>` stripping
+
+Two related gaps observed with reasoning models on OpenAI-compatible
+endpoints:
+
+- **Structured reasoning is dropped, not logged.** Mastra's OpenAI-compatible
+  model parses `reasoning_content` into `reasoning-delta` stream parts, but
+  our `modelLogging.ts` wrapper only accumulates `text-delta` — reasoning
+  never shows in the execution tree. Fix: accumulate `reasoning-delta` parts
+  and include a `reasoning` field in the logged model output.
+- **Inline `<think>` leaks into the agent output.** Some models/providers
+  (DeepSeek-R1 distills, Qwen, GLM via certain gateways) return reasoning
+  inline in `content` as `<think>...</think>` tags; for us it is
+  indistinguishable from text and ends up in the final output. Fix: strip
+  `<think>` blocks in the logging wrapper (decide: always vs. opt-in node
+  toggle), log them as reasoning, and optionally expose `reasoning` in the
+  agent node's JSON output. Handle the edge case of an unclosed `<think>`
+  tag.
+
+## SSH sandbox / remote workspace adapters
+
+Custom `MastraSandbox` executing commands in a remote container over SSH
+(`ssh2`), plus an SFTP-backed `MastraFilesystem`. Only needed if, after the
+ACP node ships, we still want our own agent to run raw commands on the worker
+pod (ACP already covers "delegate the coding task there"). Cloud filesystem
+adapters (S3/R2, GCS, Azure Blob — separate `@mastra/*` packages) also live
+here until someone needs them.
+
+## Supervisor / sub-agents
+
+Expose Mastra's `agents:` map (e.g. `AcpAgent` as a delegatable sub-agent, or
+Mastra-native sub-agents) on the agent node. Multi-agent orchestration is its
+own design conversation.
+
+## Mastra Tool omni-node
+
+A sub-node where the user writes custom tool code inline. Probably redundant
+next to n8n's stock Code Tool + MCP; revisit only if a concrete need appears.
 
 ## End-to-end workflow tests inside a real n8n (needs research)
 

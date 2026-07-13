@@ -26,8 +26,16 @@ Set the provider API key for whatever model you use (e.g. `OPENAI_API_KEY`,
 ## Usage
 
 1. Add a **Mastra Agent** node.
-2. Set **Model** to a Mastra model-router id, e.g. `openai/gpt-4o-mini` or
-   `anthropic/claude-3-5-sonnet-latest`.
+2. In the **Mastra Model** node, pick a model **From list** (fetched live from
+   your endpoint's `GET /models`) or switch to **By ID** and type the model
+   name exactly as the endpoint expects it (slashes kept). Optional:
+   - **Options** — temperature, max output tokens, top-p, penalties,
+     reasoning effort, stop sequences. When the endpoint advertises
+     per-model capabilities (OpenRouter `supported_parameters`), unsupported
+     options fail fast with a clear error.
+   - **Custom Headers** — extra headers on every model request (expression
+     values supported), e.g. an OpenRouter session id. `Authorization` is
+     always taken from the credential.
 3. (Optional) Add a **Postgres Memory (Mastra)** node and connect it to the
    agent's **Memory** input. Pick the native n8n `postgres` credential.
 

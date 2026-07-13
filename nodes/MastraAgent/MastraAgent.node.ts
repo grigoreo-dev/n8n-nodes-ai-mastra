@@ -9,7 +9,7 @@ import {
 import type { Agent as AgentType } from '@mastra/core/agent';
 
 import { isMastraMemoryHandoff } from '../shared/memoryHandoff';
-import { isMastraModelHandoff } from '../shared/modelHandoff';
+import { isMastraModelHandoff, type MastraModelHandoff } from '../shared/modelHandoff';
 import { toMastraToolSet } from '../shared/toolBridge';
 
 /**
@@ -204,7 +204,30 @@ export class MastraAgent implements INodeType {
 
 				const agent = new Agent(agentConfig);
 
-				const stream = await agent.stream(prompt, memoryScope ? { memory: memoryScope } : {});
+				const streamOptions: {
+					memory?: { thread: string; resource: string };
+					modelSettings?: NonNullable<MastraModelHandoff['settings']>;
+					// Structural stand-in for Mastra's ProviderOptions, which
+					// @mastra/core/agent does not export in 1.49.0. Values must be
+					// JSON-serializable (SharedV2ProviderOptions); string covers ours.
+					providerOptions?: Record<string, Record<string, string>>;
+				} = {};
+				if (memoryScope) streamOptions.memory = memoryScope;
+				if (connectedModel.settings) streamOptions.modelSettings = connectedModel.settings;
+				// In @mastra/core 1.49.0 our OpenAI-compatible path resolves a spec-v2
+				// model, and Mastra applies modelSettings.reasoning only for V4 models —
+				// so reasoning set there never reaches the wire. What DOES reach it is
+				// providerOptions['openai-compatible'].reasoningEffort, which the
+				// OpenAI-compatible chat model emits as reasoning_effort in the request
+				// body. We send both: providerOptions for today's spec-v2 models,
+				// modelSettings for future V4 models (harmless duplication).
+				if (connectedModel.settings?.reasoning) {
+					streamOptions.providerOptions = {
+						'openai-compatible': { reasoningEffort: connectedModel.settings.reasoning },
+					};
+				}
+
+				const stream = await agent.stream(prompt, streamOptions);
 				const text = await stream.text;
 
 				returnData.push({
